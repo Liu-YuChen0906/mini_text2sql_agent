@@ -142,13 +142,16 @@ def _related_columns(info: QuestionInfo, catalog: FileCatalog, column_store: Any
             字段名在 Catalog 中的项；同时加入文本包含或相似度至少 0.8 的字段。
             向量检索异常时打印提示并继续文本匹配；两者都没命中则返回空集合。
     """
-    terms = [
-        value.strip() for values in (info.keywords, info.dimensions, info.metrics) for value in values if value.strip()
-    ]
+    terms: list[str] = []
+    for term_group in (info.keywords, info.dimensions, info.metrics):
+        for value in term_group:
+            term = value.strip()
+            if term:
+                terms.append(term)
     query = " ".join(terms) or info.rewrite_question
-    all_columns = catalog.get_column_list() + [
-        column for table in catalog.get_table_list() for column in catalog.get_column_list(table)
-    ]
+    all_columns = catalog.get_column_list()
+    for table in catalog.get_table_list():
+        all_columns.extend(catalog.get_column_list(table))
     known = {column["column_name"] for column in all_columns}
     matches = set()
     try:

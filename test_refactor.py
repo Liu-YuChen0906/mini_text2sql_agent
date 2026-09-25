@@ -280,7 +280,7 @@ def test_generate_sql_uses_injected_model():
 
 
 def test_main_keeps_terminal_output_and_reuses_model(monkeypatch, capsys):
-    """用途：确认入口沿用原终端文本，选表、SQL 生成、解读共用模型。
+    """用途：确认入口按顺序输出 SQL 与表格，选表和 SQL 生成共用模型。
 
     参数输入：monkeypatch、capsys（pytest fixture）替换外部服务并捕获输出。
     输出：None；断言调用链参数及终端输出的固定顺序和内容。
@@ -337,15 +337,12 @@ def test_main_keeps_terminal_output_and_reuses_model(monkeypatch, capsys):
             "error": None,
         },
     )
-    monkeypatch.setattr(main, "explain_result", lambda result, model: (calls.append((result, model)) or "查询得到 1。"))
-
     main.main()
     assert capsys.readouterr().out == (
-        "\n生成的 SQL：\nSELECT 1 AS id\n\n执行结果：\nid\n--\n1 \n\n自然语言说明：\n查询得到 1。\n"
+        "\n生成的 SQL：\nSELECT 1 AS id\n\n执行结果：\nid\n--\n1 \n"
     )
     assert calls[0] == (resources.catalog, indexes, llm, resources.database_path)
     assert calls[1] == ("改写问题", "SQL 上下文", llm)
-    assert calls[2][1] is llm
 
 
 def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_path):
