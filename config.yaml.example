@@ -6,3 +6,17 @@ default_llm:
     model: deepseek-chat
     temperature: 0
     max_tokens: 1024
+
+# 与原项目一致：Catalog 使用文件存储，Chroma 保存三组检索索引。
+catalog_store:
+  store_type: file_system
+  data_path: catalog_data
+vector_db_path: chroma_db
+embedding_model:
+  class: langchain_openai.OpenAIEmbeddings
+  params:
+    api_key: YOUR_EMBEDDING_API_KEY_HERE
+    base_url: YOUR_OPENAI_COMPATIBLE_BASE_URL_HERE
+    model: text-embedding-v4
+    chunk_size: 10
+    check_embedding_ctx_length: false
