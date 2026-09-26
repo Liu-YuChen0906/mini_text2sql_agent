@@ -13,7 +13,7 @@ from execute_sql import execute_readonly_sql
 from generate_sql import generate_sql
 from presentation import render_result_table
 from resources import IndexStores, _check_chroma_migrations, initialize_chroma
-from schema_linking import LinkResult, SchemaLinker, SelectedTable
+from schema_linking import SchemaLinker
 from sql_context import build_sql_context
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -198,6 +198,18 @@ def test_invalid_selection_retries_once():
     assert [item.table for item in linked.selected] == ["Customers", "Orders"]
 
 
+def test_link_from_info_does_not_extract_again(monkeypatch):
+    """The graph's selection node consumes its prior extraction result once."""
+    import schema_linking
+
+    linker, llm, _ = make_linker([selection_response()])
+    monkeypatch.setattr(schema_linking, "extract_question", lambda *_: pytest.fail("duplicate extraction"))
+    info = schema_linking.QuestionInfo(**question_response())
+    linked = linker.link_from_info(info)
+    assert [item.table for item in linked.selected] == ["Customers", "Orders"]
+    assert len(llm.calls) == 1
+
+
 def test_retrieval_failure_keeps_text_match_and_table_context(capsys):
     """用途：确认三个索引失败时沿用原有文本匹配和空示例回退。
 
@@ -279,70 +291,51 @@ def test_generate_sql_uses_injected_model():
     assert seen[0][1].content == "问题"
 
 
-def test_main_keeps_terminal_output_and_reuses_model(monkeypatch, capsys):
-    """用途：确认入口按顺序输出 SQL 与表格，选表和 SQL 生成共用模型。
-
-    参数输入：monkeypatch、capsys（pytest fixture）替换外部服务并捕获输出。
-    输出：None；断言调用链参数及终端输出的固定顺序和内容。
-    """
+def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
+    """The CLI displays a completed graph result and its resumable thread ID."""
     import main
 
-    llm = object()
-    indexes = IndexStores(object(), object(), object())
-    resources = SimpleNamespace(catalog=object(), indexes=indexes, llm=llm, database_path=Path("example.sqlite"))
-    linked = LinkResult("改写问题", [SelectedTable("Orders", ["order_id"])], {"Orders": {"order_id"}})
-    calls = []
+    result = {"status": "success", "columns": ["id"], "rows": [[1]], "truncated": False, "error": None}
 
-    class FakeLinker:
-        """类用途：替代入口中的 SchemaLinker 以记录依赖。
+    class FakeGraph:
+        def invoke(self, state, config):
+            assert state["question"] == "原始问题"
+            assert config["configurable"]["thread_id"] == "fixed-id"
+            return {"status": "success", "sql": "SELECT 1 AS id", "result": result}
 
-        支持功能：返回固定 LinkResult，不访问模型或数据库。
-        """
-
-        def __init__(self, catalog, stores, model, database_path):
-            """用途：核对入口向选表器传入的共享资源。
-
-            参数输入：catalog（object）、stores（IndexStores）、model（object）和
-                database_path（Path）均来自假资源容器。
-            输出：None；记录四个构造参数。
-            """
-            calls.append((catalog, stores, model, database_path))
-
-        def link(self, question):
-            """用途：模拟选表并核对原始问题。
-
-            参数输入：question（str）是标准输入中的自然语言问题。
-            输出：LinkResult，固定的已选表和数据库字段。
-            """
-            assert question == "原始问题"
-            return linked
-
+    monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(tmp_path / "checkpoints.sqlite")])
     monkeypatch.setattr("builtins.input", lambda _: "原始问题")
-    monkeypatch.setattr(main, "load_resources", lambda: resources)
-    monkeypatch.setattr(main, "SchemaLinker", FakeLinker)
-    monkeypatch.setattr(main, "build_sql_context", lambda *args: "SQL 上下文")
-    monkeypatch.setattr(
-        main,
-        "generate_sql",
-        lambda question, context, model: (calls.append((question, context, model)) or "SELECT 1 AS id"),
-    )
-    monkeypatch.setattr(
-        main,
-        "execute_readonly_sql",
-        lambda sql, path: {
-            "status": "success",
-            "columns": ["id"],
-            "rows": [[1]],
-            "truncated": False,
-            "error": None,
-        },
-    )
+    monkeypatch.setattr(main, "load_resources", lambda: object())
+    monkeypatch.setattr(main, "build_workflow", lambda resources, checkpointer: FakeGraph())
+    monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="fixed-id"))
     main.main()
     assert capsys.readouterr().out == (
-        "\n生成的 SQL：\nSELECT 1 AS id\n\n执行结果：\nid\n--\n1 \n"
+        "任务 ID：fixed-id\n\n生成的 SQL：\nSELECT 1 AS id\n\n执行结果：\nid\n--\n1 \n"
     )
-    assert calls[0] == (resources.catalog, indexes, llm, resources.database_path)
-    assert calls[1] == ("改写问题", "SQL 上下文", llm)
+
+
+def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
+    """The CLI uses the saved interrupt and its original thread ID on restart."""
+    import main
+
+    class FakeGraph:
+        def get_state(self, config):
+            assert config["configurable"]["thread_id"] == "saved-id"
+            return SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"kind": "clarification", "question": "哪个月份？"})])])
+
+        def invoke(self, command, config):
+            assert command.resume == "上个月"
+            assert config["configurable"]["thread_id"] == "saved-id"
+            return {"status": "error", "error": "测试结束"}
+
+    monkeypatch.setattr("sys.argv", ["main.py", "--resume", "saved-id", "--checkpoint", str(tmp_path / "checkpoints.sqlite")])
+    monkeypatch.setattr("builtins.input", lambda _: "上个月")
+    monkeypatch.setattr(main, "load_resources", lambda: object())
+    monkeypatch.setattr(main, "build_workflow", lambda resources, checkpointer: FakeGraph())
+    main.main()
+    output = capsys.readouterr().out
+    assert "正在恢复任务：saved-id" in output
+    assert "需要澄清：哪个月份？" in output
 
 
 def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_path):

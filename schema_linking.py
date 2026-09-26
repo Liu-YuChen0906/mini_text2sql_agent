@@ -94,6 +94,11 @@ def extract_question(llm: Any, question: str) -> QuestionInfo:
         "提取业务实体、字段、指标及常见英文对应词，不要臆造数据库字段名。",
         question,
     )
+    return _question_info_from_json(result)
+
+
+def _question_info_from_json(result: dict[str, Any]) -> QuestionInfo:
+    """Validate the fields shared by the original and graph extraction prompts."""
     if not isinstance(result.get("rewrite_question"), str) or not result["rewrite_question"].strip():
         raise ValueError("信息提取结果缺少 rewrite_question。")
     for key in ("keywords", "dimensions", "metrics"):
@@ -101,6 +106,27 @@ def extract_question(llm: Any, question: str) -> QuestionInfo:
         if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
             raise ValueError(f"信息提取结果中的 {key} 必须是字符串数组。")
     return QuestionInfo(result["rewrite_question"], result["keywords"], result["dimensions"], result["metrics"])
+
+
+def extract_question_for_graph(llm: Any, question: str) -> tuple[QuestionInfo | None, str | None]:
+    """Extract the query intent, or return one concrete clarification question."""
+    result = _model_json(
+        llm,
+        "分析用户的数据查询问题。只返回 JSON 对象，包含 needs_clarification（布尔值）、"
+        "clarification_question（字符串）、rewrite_question（字符串）、keywords、dimensions、metrics（三项字符串数组）。"
+        "仅当缺失的信息会改变应查询的指标、筛选条件或数据范围时才要求澄清；"
+        "否则 needs_clarification 为 false，并忠实改写问题，不要臆造字段。",
+        question,
+    )
+    needs_clarification = result.get("needs_clarification")
+    if not isinstance(needs_clarification, bool):
+        raise ValueError("信息提取结果缺少布尔型 needs_clarification。")
+    if needs_clarification:
+        clarification = result.get("clarification_question")
+        if not isinstance(clarification, str) or not clarification.strip():
+            raise ValueError("需要澄清时必须提供 clarification_question。")
+        return None, clarification.strip()
+    return _question_info_from_json(result), None
 
 
 def database_columns(database_path: str | Path) -> dict[str, set[str]]:
@@ -325,6 +351,10 @@ class SchemaLinker:
             第二次仍无效则抛 ValueError。问题提取错误不在此处重试。
         """
         info = extract_question(self.llm, question)
+        return self.link_from_info(info)
+
+    def link_from_info(self, info: QuestionInfo) -> LinkResult:
+        """Select tables from an already extracted question without another extraction call."""
         real = database_columns(self.database_path)
         matched = _related_columns(info, self.catalog, self.indexes.columns)
         candidates = _candidate_tables(self.catalog, matched, real)

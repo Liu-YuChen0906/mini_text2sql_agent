@@ -75,3 +75,12 @@ def generate_sql(question: str, schema: str, llm: Any) -> str:
     chain = build_prompt() | llm | StrOutputParser()
     content = chain.invoke({"dialect": DIALECT, "schema": schema, "question": question})
     return content.replace("```sql", "").replace("```", "").strip()
+
+
+def regenerate_sql(question: str, schema: str, previous_sql: str, error: str, llm: Any) -> str:
+    """Ask the model to repair a failed query while retaining the original intent."""
+    feedback = (
+        f"{question}\n\nThe previous SQLite query failed. Correct it and return SQL only."
+        f"\nPrevious SQL: {previous_sql}\nSQLite error: {error}"
+    )
+    return generate_sql(feedback, schema, llm)
