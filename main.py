@@ -1,4 +1,4 @@
-"""CLI entry point for the resumable Mini Text2SQL graph."""
+"""可暂停并恢复的 Mini Text2SQL 命令行入口。"""
 
 import argparse
 import sqlite3
@@ -14,7 +14,13 @@ from workflow import build_workflow
 
 
 def _request_feedback(payload: dict) -> str | dict[str, str]:
-    """Collect one clarification or SQL review decision from the terminal."""
+    """用途：根据暂停类型，从终端收集一次澄清回答或 SQL 审核决定。
+
+    参数输入：payload 是图的 interrupt 内容；kind 为 clarification 时包含问题，
+        否则包含待审核 SQL、评分原因和结果预览。
+    输出：澄清时返回回答字符串；审核时返回含 decision 的字典，edit 还包含 SQL。
+    异常：标准输入中断或结束时，沿用 input 的 KeyboardInterrupt 或 EOFError。
+    """
     if payload.get("kind") == "clarification":
         print(f"需要澄清：{payload['question']}")
         return input("你的回答：").strip()
@@ -35,6 +41,11 @@ def _request_feedback(payload: dict) -> str | dict[str, str]:
 
 
 def _show_result(state: dict) -> None:
+    """用途：把图的最终状态打印为失败原因或 SQL 与查询表格。
+
+    参数输入：state 是 graph.invoke 返回的状态字典，成功时含 sql 和 result。
+    输出：None；只向标准输出写文本，不修改状态或重新执行查询。
+    """
     if state.get("status") != "success":
         print(f"查询未完成：{state.get('error') or (state.get('result') or {}).get('error') or state.get('status')}")
         return
@@ -45,6 +56,11 @@ def _show_result(state: dict) -> None:
 
 
 def main() -> None:
+    """用途：处理新问题或恢复暂停任务，并驱动一次命令行查询直至结束。
+
+    参数输入：从命令行读取 --resume、--checkpoint，从标准输入读取问题及反馈。
+    输出：None；打印任务 ID、暂停提示与最终结果；检查点保存在 SQLite 文件中。
+    """
     parser = argparse.ArgumentParser(description="Mini Text2SQL：可暂停并恢复的查询")
     parser.add_argument("--resume", metavar="THREAD_ID", help="继续先前暂停的查询")
     parser.add_argument("--checkpoint", type=Path, default=PROJECT_DIR / "checkpoints.sqlite")

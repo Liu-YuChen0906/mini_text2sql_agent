@@ -1,4 +1,4 @@
-"""LangGraph orchestration around Mini's existing Text2SQL components."""
+"""用 LangGraph 编排 Mini Text2SQL 的澄清、选表、执行修复与人工审核。"""
 
 import re
 from typing import Any, TypedDict
@@ -23,7 +23,11 @@ REPAIRABLE_ERROR = re.compile(
 
 
 class SQLState(TypedDict, total=False):
-    """Only JSON-like run data is persisted; resources stay outside the state."""
+    """类用途：定义一次 Text2SQL 查询在 LangGraph 节点之间传递的状态字段。
+
+    内容：保存问题、澄清记录、选表结果、SQL、执行结果、错误、重试次数和评分。
+    状态只含可持久化的查询数据；Catalog、模型和数据库连接留在图外的资源对象中。
+    """
 
     question: str
     clarification_history: list[str]
@@ -45,6 +49,11 @@ class SQLState(TypedDict, total=False):
 
 
 def _link_result(state: SQLState) -> LinkResult:
+    """用途：把检查点中的普通字典还原为 SQL 上下文函数需要的 LinkResult。
+
+    参数输入：state 含 rewrite_question、selected 表字段列表及 real 字段列表。
+    输出：LinkResult；将已选表转为 SelectedTable，并将真实字段列表转为集合。
+    """
     return LinkResult(
         state["rewrite_question"],
         [SelectedTable(item["table"], list(item["columns"])) for item in state["selected"]],
@@ -53,10 +62,20 @@ def _link_result(state: SQLState) -> LinkResult:
 
 
 def build_workflow(resources: RuntimeResources, checkpointer: Any):
-    """Compile a resumable Text2SQL graph using already initialized dependencies."""
+    """用途：用已初始化资源构建并编译可暂停、可恢复的 Text2SQL 状态图。
+
+    参数输入：resources 包含 Catalog、索引、模型和 SQLite 路径；checkpointer
+        用于保存图状态，供澄清和人工审核后按任务 ID 恢复。
+    输出：已编译的 LangGraph 图；各节点返回局部状态更新，条件边负责选择下一步。
+    """
     linker = SchemaLinker(resources.catalog, resources.indexes, resources.llm, resources.database_path)
 
     def extract_node(state: SQLState) -> dict[str, Any]:
+        """用途：拼接原问题与补充回答，让模型决定澄清或提取查询信息。
+
+        参数输入：state 含原问题及已有澄清记录。
+        输出：需要澄清时写入问题；明确时写入 QuestionInfo 字典；失败时写入错误状态。
+        """
         question = state["question"]
         for answer in state.get("clarification_history", []):
             question += f"\n用户补充：{answer}"
@@ -82,11 +101,21 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         }
 
     def route_extraction(state: SQLState) -> str:
+        """用途：根据提取状态选择澄清、选表或结束。
+
+        参数输入：state 的 status 为 needs_clarification、extracted 或错误状态。
+        输出：str，取 clarify、link 或 end，供 extract 的条件边使用。
+        """
         if state.get("status") == "needs_clarification":
             return "clarify"
         return "link" if state.get("status") == "extracted" else "end"
 
     def clarify_node(state: SQLState) -> dict[str, Any]:
+        """用途：暂停图等待用户回答澄清问题，并保存有效回答。
+
+        参数输入：state 含 clarification_question 和此前回答。
+        输出：恢复后追加 clarification_history；空回答则返回错误状态。
+        """
         answer = interrupt({"kind": "clarification", "question": state["clarification_question"]})
         if not isinstance(answer, str) or not answer.strip():
             return {"status": "error", "error": "澄清回答不能为空。"}
@@ -96,6 +125,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         }
 
     def link_node(state: SQLState) -> dict[str, Any]:
+        """用途：复用已提取的 QuestionInfo，选择并校验表与字段。
+
+        参数输入：state 的 info 是提取节点保存的问题信息字典。
+        输出：已选表字段和真实字段的可持久化字典；失败时返回错误状态。
+        """
         try:
             info = QuestionInfo(**state["info"])
             linked = linker.link_from_info(info)
@@ -108,6 +142,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         }
 
     def context_node(state: SQLState) -> dict[str, Any]:
+        """用途：将选表结果、业务规则和相似 SQL 示例整理成生成上下文。
+
+        参数输入：state 含改写问题、已选表和数据库真实字段。
+        输出：sql_context 文本及 context_ready 状态；失败时返回错误状态。
+        """
         try:
             context = build_sql_context(_link_result(state), resources.catalog, resources.indexes.text2sql)
         except Exception as exc:
@@ -115,6 +154,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return {"status": "context_ready", "sql_context": context}
 
     def generate_node(state: SQLState) -> dict[str, Any]:
+        """用途：让模型根据改写问题和结构上下文生成初版 SQL。
+
+        参数输入：state 含 rewrite_question 和 sql_context。
+        输出：非空 SQL 与 sql_ready 状态；模型异常或空结果转为错误状态。
+        """
         try:
             sql = generate_sql(state["rewrite_question"], state["sql_context"], resources.llm)
         except Exception as exc:
@@ -124,6 +168,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return {"status": "sql_ready", "sql": sql}
 
     def regenerate_node(state: SQLState) -> dict[str, Any]:
+        """用途：把最近一次执行错误或人工拒绝反馈给模型以修复 SQL。
+
+        参数输入：state 含问题、上下文和 errors 列表中的最近一项。
+        输出：修复后的 SQL，并将 retry_count 加一；失败时返回错误状态。
+        """
         previous = state["errors"][-1]
         try:
             sql = regenerate_sql(
@@ -136,6 +185,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return {"status": "sql_ready", "sql": sql, "retry_count": state.get("retry_count", 0) + 1}
 
     def execute_node(state: SQLState) -> dict[str, Any]:
+        """用途：通过只读执行器运行当前 SQL，并记录结果或错误。
+
+        参数输入：state 的 sql 是当前待运行语句；数据库路径来自闭包资源。
+        输出：result 与其 status；非成功结果还会追加 errors，异常转为 fatal。
+        """
         try:
             result = execute_readonly_sql(state["sql"], resources.database_path)
         except Exception as exc:
@@ -149,6 +203,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return update
 
     def route_execution(state: SQLState) -> str:
+        """用途：按执行结果决定评分、有限次修复或结束。
+
+        参数输入：state 含执行 status、result 错误信息及 retry_count。
+        输出：str，取 score、regenerate 或 end；仅指定的 SQLite 错误可重试。
+        """
         if state.get("status") == "success":
             return "score"
         if state.get("status") != "error":
@@ -163,6 +222,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return "end"
 
     def score_node(state: SQLState) -> dict[str, Any]:
+        """用途：评估成功执行的 SQL 与问题是否匹配。
+
+        参数输入：state 含问题、SQL、结构上下文和执行结果。
+        输出：confidence 与原因；评分异常时分数为 None，并记录失败原因。
+        """
         try:
             evaluated = score_sql(
                 resources.llm, state["rewrite_question"], state["sql"], state["sql_context"], state["result"]
@@ -172,10 +236,20 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
             return {"confidence": None, "confidence_reasons": [f"评分不可用：{exc}"]}
 
     def route_score(state: SQLState) -> str:
+        """用途：按评分阈值决定直接结束或进入人工审核。
+
+        参数输入：state 的 confidence 为 0 到 1 的分数或 None。
+        输出：str，分数至少 0.7 时为 end，否则为 review。
+        """
         score = state.get("confidence")
         return "end" if score is not None and score >= CONFIDENCE_THRESHOLD else "review"
 
     def review_node(state: SQLState) -> dict[str, Any]:
+        """用途：暂停等待人工批准、修改或拒绝低置信度 SQL。
+
+        参数输入：state 含问题、SQL、评分原因和可展示的结果预览。
+        输出：批准时保持成功；修改时保存新 SQL；拒绝时记录错误；无效输入返回错误。
+        """
         feedback = interrupt(
             {
                 "kind": "sql_review",
@@ -208,6 +282,11 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         return {"status": "error", "error": "人工审核决定必须是 approve、edit 或 reject。"}
 
     def route_review(state: SQLState) -> str:
+        """用途：把人工修改送回执行，把拒绝送去修复，其余决定结束。
+
+        参数输入：state 含 human_decision、status 和 retry_count。
+        输出：str，取 execute、regenerate 或 end；拒绝只在重试限额内重新生成。
+        """
         if state.get("human_decision") == "edit" and state.get("status") == "sql_ready":
             return "execute"
         if (

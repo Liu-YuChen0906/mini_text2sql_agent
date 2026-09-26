@@ -199,7 +199,11 @@ def test_invalid_selection_retries_once():
 
 
 def test_link_from_info_does_not_extract_again(monkeypatch):
-    """The graph's selection node consumes its prior extraction result once."""
+    """用途：确认图的选表节点复用已提取信息，不再次调用问题提取。
+
+    参数输入：monkeypatch（pytest fixture）把重复提取替换为测试失败。
+    输出：None；断言选表成功且模型只调用一次。
+    """
     import schema_linking
 
     linker, llm, _ = make_linker([selection_response()])
@@ -292,13 +296,23 @@ def test_generate_sql_uses_injected_model():
 
 
 def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
-    """The CLI displays a completed graph result and its resumable thread ID."""
+    """用途：确认命令行入口打印任务 ID、最终 SQL 和查询表格。
+
+    参数输入：pytest 的替换工具、输出捕获工具和临时目录。
+    输出：None；断言图收到初始问题及完整的终端文本。
+    """
     import main
 
     result = {"status": "success", "columns": ["id"], "rows": [[1]], "truncated": False, "error": None}
 
     class FakeGraph:
+        """类用途：返回固定成功状态，隔离入口测试与真实图和模型。"""
+
         def invoke(self, state, config):
+            """用途：核对入口传入的问题与任务 ID，并返回固定结果。
+
+            参数输入：state 为初始状态，config 为图运行配置；输出：成功状态字典。
+            """
             assert state["question"] == "原始问题"
             assert config["configurable"]["thread_id"] == "fixed-id"
             return {"status": "success", "sql": "SELECT 1 AS id", "result": result}
@@ -315,15 +329,29 @@ def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
 
 
 def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
-    """The CLI uses the saved interrupt and its original thread ID on restart."""
+    """用途：确认入口用原任务 ID 读取澄清暂停，并把回答传回图。
+
+    参数输入：pytest 的替换工具、输出捕获工具和临时目录。
+    输出：None；断言恢复值和终端澄清提示。
+    """
     import main
 
     class FakeGraph:
+        """类用途：模拟带未处理澄清中断的检查点图。"""
+
         def get_state(self, config):
+            """用途：返回指定任务 ID 的待处理澄清快照。
+
+            参数输入：config 为图运行配置；输出：带 interrupts 的模拟快照。
+            """
             assert config["configurable"]["thread_id"] == "saved-id"
             return SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"kind": "clarification", "question": "哪个月份？"})])])
 
         def invoke(self, command, config):
+            """用途：核对恢复命令和原任务 ID，并结束模拟查询。
+
+            参数输入：command 为 Command.resume，config 为图配置；输出：结束状态。
+            """
             assert command.resume == "上个月"
             assert config["configurable"]["thread_id"] == "saved-id"
             return {"status": "error", "error": "测试结束"}

@@ -98,7 +98,13 @@ def extract_question(llm: Any, question: str) -> QuestionInfo:
 
 
 def _question_info_from_json(result: dict[str, Any]) -> QuestionInfo:
-    """Validate the fields shared by the original and graph extraction prompts."""
+    """用途：校验模型返回的问题改写和三组检索线索，并转换为 QuestionInfo。
+
+    参数输入：result 是已解析的模型 JSON 对象，需含 rewrite_question、keywords、
+        dimensions、metrics；本函数供普通提取和图提取共同使用。
+    输出：QuestionInfo，保留模型给出的改写文本和三个字符串数组。
+    异常：改写为空、字段缺失或数组元素不是字符串时抛 ValueError。
+    """
     if not isinstance(result.get("rewrite_question"), str) or not result["rewrite_question"].strip():
         raise ValueError("信息提取结果缺少 rewrite_question。")
     for key in ("keywords", "dimensions", "metrics"):
@@ -109,7 +115,12 @@ def _question_info_from_json(result: dict[str, Any]) -> QuestionInfo:
 
 
 def extract_question_for_graph(llm: Any, question: str) -> tuple[QuestionInfo | None, str | None]:
-    """Extract the query intent, or return one concrete clarification question."""
+    """用途：让模型判断问题是否缺少关键信息，再提取查询意图或澄清问题。
+
+    参数输入：llm 是聊天模型；question 是原问题及已有澄清回答拼接的文本。
+    输出：问题明确时返回 (QuestionInfo, None)；需要澄清时返回 (None, 问题文本)。
+    异常：模型 JSON 缺少布尔判断、澄清问题为空或提取字段无效时抛 ValueError。
+    """
     result = _model_json(
         llm,
         "分析用户的数据查询问题。只返回 JSON 对象，包含 needs_clarification（布尔值）、"
@@ -354,7 +365,12 @@ class SchemaLinker:
         return self.link_from_info(info)
 
     def link_from_info(self, info: QuestionInfo) -> LinkResult:
-        """Select tables from an already extracted question without another extraction call."""
+        """用途：消费已提取的问题信息，检索并校验所选表和字段，不重复调用提取模型。
+
+        参数输入：info 是图的 extract 节点产生的 QuestionInfo。
+        输出：LinkResult，包含改写问题、已选表字段及数据库真实字段集合。
+        异常：无候选表或模型两次选表都无效时抛 ValueError。
+        """
         real = database_columns(self.database_path)
         matched = _related_columns(info, self.catalog, self.indexes.columns)
         candidates = _candidate_tables(self.catalog, matched, real)

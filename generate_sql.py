@@ -78,7 +78,12 @@ def generate_sql(question: str, schema: str, llm: Any) -> str:
 
 
 def regenerate_sql(question: str, schema: str, previous_sql: str, error: str, llm: Any) -> str:
-    """Ask the model to repair a failed query while retaining the original intent."""
+    """用途：把上次 SQL 和 SQLite 错误反馈给模型，要求按原问题重新生成查询。
+
+    参数输入：question 为改写后的问题，schema 为已选表的结构上下文，
+        previous_sql 为失败的 SQL，error 为执行错误，llm 为复用的聊天模型。
+    输出：str，经过 generate_sql 清理代码围栏后的新 SQL；此处不执行或校验。
+    """
     feedback = (
         f"{question}\n\nThe previous SQLite query failed. Correct it and return SQL only."
         f"\nPrevious SQL: {previous_sql}\nSQLite error: {error}"

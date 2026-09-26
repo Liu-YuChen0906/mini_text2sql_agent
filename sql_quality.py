@@ -1,4 +1,4 @@
-"""Post-execution SQL quality evaluation for the optional human review route."""
+"""执行成功后的 SQL 质量评分，供低置信度人工审核使用。"""
 
 from dataclasses import dataclass
 from typing import Any
@@ -8,12 +8,23 @@ from schema_linking import _model_json
 
 @dataclass(frozen=True)
 class QualityScore:
+    """类用途：保存 SQL 质量评分及模型给出的原因。
+
+    属性：score 是 0 到 1 的分数；reasons 是供人工审核查看的原因列表。
+    """
+
     score: float
     reasons: list[str]
 
 
 def score_sql(llm: Any, question: str, sql: str, schema: str, result: dict[str, Any]) -> QualityScore:
-    """Evaluate semantic fit, not merely whether SQLite accepted the query."""
+    """用途：让模型评估已执行 SQL 是否符合问题的业务含义。
+
+    参数输入：llm 是聊天模型；question 是改写问题；sql 是已执行查询；
+        schema 是生成时使用的结构上下文；result 是执行器的结果字典。
+    输出：QualityScore，含 0 到 1 的评分和原因；只给模型前五行结果预览。
+    异常：模型返回的分数越界、原因类型不符或 JSON 无效时抛 ValueError。
+    """
     preview = result.get("rows", [])[:5]
     answer = _model_json(
         llm,
