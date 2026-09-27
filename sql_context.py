@@ -1,11 +1,11 @@
 """从已选表和检索到的 SQL 示例生成模型可读的结构上下文。"""
 
 import re
-import sys
 from typing import Any
 
 from catalog import FileCatalog
 from schema_linking import LinkResult
+from presentation import create_console, show_notice
 
 
 def _table_sections(link: LinkResult, catalog: FileCatalog) -> list[str]:
@@ -53,7 +53,7 @@ def _related_sql_examples(question: str, selected_tables: set[str], catalog: Fil
     try:
         found = store.max_marginal_relevance_search(question, k=5, fetch_k=20)
     except Exception as exc:
-        print(f"SQL 示例检索不可用：{type(exc).__name__}", file=sys.stderr)
+        show_notice(f"SQL 示例检索不可用：{type(exc).__name__}", "warning", console=create_console(stderr=True))
         found = []
     for doc in found:
         if doc.page_content not in examples:

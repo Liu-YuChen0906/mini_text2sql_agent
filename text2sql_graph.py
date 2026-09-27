@@ -4,7 +4,7 @@ import re
 from typing import Any, TypedDict
 
 from execute_sql import QueryResult, execute_readonly_sql
-from generate_sql import generate_sql, regenerate_sql
+from generate_sql import generate_sql, regenerate_sql, revise_sql
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from resources import RuntimeResources
@@ -30,7 +30,10 @@ class SQLState(TypedDict, total=False):
     """
 
     question: str
+    context: str
+    session_closed: bool
     clarification_history: list[str]
+    schema_feedback_history: list[str]
     clarification_question: str
     info: dict[str, Any]
     selected: list[dict[str, Any]]
@@ -38,14 +41,42 @@ class SQLState(TypedDict, total=False):
     rewrite_question: str
     sql_context: str
     sql: str
-    result: QueryResult
+    result: QueryResult | None
     errors: list[dict[str, str]]
     retry_count: int
+    human_feedback: str
     confidence: float | None
     confidence_reasons: list[str]
     human_decision: str
     status: str
     error: str
+
+
+def new_text2sql_turn(question: str, *, context: str = "") -> SQLState:
+    """用途：为一次独立查询准备初始状态，清空上一轮的临时字段。"""
+    return {
+        "question": question,
+        "context": context,
+        "session_closed": False,
+        "clarification_history": [],
+        "schema_feedback_history": [],
+        "clarification_question": "",
+        "info": {},
+        "selected": [],
+        "real": {},
+        "rewrite_question": "",
+        "sql_context": "",
+        "sql": "",
+        "result": None,
+        "errors": [],
+        "retry_count": 0,
+        "human_feedback": "",
+        "confidence": None,
+        "confidence_reasons": [],
+        "human_decision": "",
+        "status": "new",
+        "error": "",
+    }
 
 
 def _link_result(state: SQLState) -> LinkResult:
@@ -61,7 +92,7 @@ def _link_result(state: SQLState) -> LinkResult:
     )
 
 
-def build_workflow(resources: RuntimeResources, checkpointer: Any):
+def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     """用途：用已初始化资源构建并编译可暂停、可恢复的 Text2SQL 状态图。
 
     参数输入：resources 包含 Catalog、索引、模型和 SQLite 路径；checkpointer
@@ -76,9 +107,15 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         参数输入：state 含原问题及已有澄清记录。
         输出：需要澄清时写入问题；明确时写入 QuestionInfo 字典；失败时写入错误状态。
         """
+        if state.get("session_closed"):
+            return {"status": "cancelled", "error": "会话已结束。"}
         question = state["question"]
         for answer in state.get("clarification_history", []):
             question += f"\n用户补充：{answer}"
+        for feedback in state.get("schema_feedback_history", []):
+            question += f"\n用户对选表的修正：{feedback}"
+        if state.get("context"):
+            question = f"已完成查询历史：\n{state['context']}\n当前用户问题：{question}"
         try:
             info, clarification = extract_question_for_graph(resources.llm, question)
         except Exception as exc:
@@ -184,6 +221,22 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
             return {"status": "error", "error": "模型未能修复 SQL。"}
         return {"status": "sql_ready", "sql": sql, "retry_count": state.get("retry_count", 0) + 1}
 
+    def revise_node(state: SQLState) -> dict[str, Any]:
+        """用途：根据人工自然语言反馈让模型重写 SQL，再交给执行节点。
+
+        参数输入：state 含原问题、上下文、旧 SQL 和 human_feedback。
+        输出：模型生成的新 SQL；模型失败或返回空文本时写入错误状态。
+        """
+        try:
+            sql = revise_sql(
+                state["rewrite_question"], state["sql_context"], state["sql"], state["human_feedback"], resources.llm
+            )
+        except Exception as exc:
+            return {"status": "error", "error": f"人工反馈后的 SQL 重写失败：{exc}"}
+        if not sql or sql.lower() == "null":
+            return {"status": "error", "error": "模型未能根据人工反馈生成 SQL。"}
+        return {"status": "sql_ready", "sql": sql}
+
     def execute_node(state: SQLState) -> dict[str, Any]:
         """用途：通过只读执行器运行当前 SQL，并记录结果或错误。
 
@@ -242,23 +295,29 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         输出：str，分数至少 0.7 时为 end，否则为 review。
         """
         score = state.get("confidence")
-        return "end" if score is not None and score >= CONFIDENCE_THRESHOLD else "review"
+        return "finalize" if score is not None and score >= CONFIDENCE_THRESHOLD else "review"
+
+    def finalize_node(state: SQLState) -> dict[str, Any]:
+        """用途：标记本轮查询完成；长期成功历史由主 Agent 统一保存。"""
+        return {"status": "success"}
 
     def review_node(state: SQLState) -> dict[str, Any]:
         """用途：暂停等待人工批准、修改或拒绝低置信度 SQL。
 
         参数输入：state 含问题、SQL、评分原因和可展示的结果预览。
-        输出：批准时保持成功；修改时保存新 SQL；拒绝时记录错误；无效输入返回错误。
+        输出：批准时保持成功；修改时保存自然语言反馈；拒绝时记录错误；
+            退出时标记取消；无效输入返回错误。
         """
         feedback = interrupt(
             {
                 "kind": "sql_review",
                 "question": state["rewrite_question"],
                 "sql": state["sql"],
+                "columns": state["result"]["columns"],
                 "result_preview": state["result"]["rows"][:5],
                 "confidence": state.get("confidence"),
                 "reasons": state.get("confidence_reasons", []),
-                "options": ["approve", "edit", "reject"],
+                "options": ["approve", "edit_sql", "edit_schema", "reject", "exit"],
             }
         )
         if not isinstance(feedback, dict):
@@ -266,11 +325,18 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
         decision = feedback.get("decision")
         if decision == "approve":
             return {"human_decision": "approve", "status": "success"}
-        if decision == "edit":
-            sql = feedback.get("sql")
-            if not isinstance(sql, str) or not sql.strip():
-                return {"status": "error", "error": "修改 SQL 不能为空。"}
-            return {"human_decision": "edit", "sql": sql.strip(), "status": "sql_ready"}
+        if decision in {"edit_sql", "edit_schema"}:
+            human_feedback = feedback.get("feedback")
+            if not isinstance(human_feedback, str) or not human_feedback.strip():
+                return {"status": "error", "error": "请用自然语言说明需要修改的内容。"}
+            update: dict[str, Any] = {
+                "human_decision": decision,
+                "human_feedback": human_feedback.strip(),
+                "status": "needs_sql_revision" if decision == "edit_sql" else "needs_relink",
+            }
+            if decision == "edit_schema":
+                update["schema_feedback_history"] = [*state.get("schema_feedback_history", []), human_feedback.strip()]
+            return update
         if decision == "reject":
             if state.get("retry_count", 0) >= MAX_SQL_RETRIES:
                 return {"human_decision": "reject", "status": "rejected", "error": "人工拒绝，SQL 重试次数已用完。"}
@@ -279,16 +345,22 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
                 "status": "rejected",
                 "errors": [*state.get("errors", []), {"sql": state["sql"], "error": "人工审核拒绝了该 SQL。"}],
             }
-        return {"status": "error", "error": "人工审核决定必须是 approve、edit 或 reject。"}
+        if decision == "exit":
+            return {"human_decision": "exit", "session_closed": True, "status": "cancelled", "error": "用户已结束会话。"}
+        return {"status": "error", "error": "人工审核决定必须是 approve、edit_sql、edit_schema、reject 或 exit。"}
 
     def route_review(state: SQLState) -> str:
-        """用途：把人工修改送回执行，把拒绝送去修复，其余决定结束。
+        """用途：按人工决定选择 SQL 重写、重新选表、拒绝修复或结束。
 
         参数输入：state 含 human_decision、status 和 retry_count。
-        输出：str，取 execute、regenerate 或 end；拒绝只在重试限额内重新生成。
+        输出：str，取 revise、extract、regenerate 或 end。
         """
-        if state.get("human_decision") == "edit" and state.get("status") == "sql_ready":
-            return "execute"
+        if state.get("human_decision") == "approve" and state.get("status") == "success":
+            return "finalize"
+        if state.get("human_decision") == "edit_sql" and state.get("status") == "needs_sql_revision":
+            return "revise"
+        if state.get("human_decision") == "edit_schema" and state.get("status") == "needs_relink":
+            return "extract"
         if (
             state.get("human_decision") == "reject"
             and state.get("status") == "rejected"
@@ -301,7 +373,9 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
     for name, node in (
         ("extract", extract_node), ("clarify", clarify_node), ("link", link_node),
         ("context", context_node), ("generate", generate_node), ("regenerate", regenerate_node),
+        ("revise", revise_node),
         ("execute", execute_node), ("score", score_node), ("review", review_node),
+        ("finalize", finalize_node),
     ):
         graph.add_node(name, node)
     graph.add_edge(START, "extract")
@@ -311,7 +385,9 @@ def build_workflow(resources: RuntimeResources, checkpointer: Any):
     graph.add_conditional_edges("context", lambda s: "generate" if s.get("status") == "context_ready" else "end", {"generate": "generate", "end": END})
     graph.add_conditional_edges("generate", lambda s: "execute" if s.get("status") == "sql_ready" else "end", {"execute": "execute", "end": END})
     graph.add_conditional_edges("regenerate", lambda s: "execute" if s.get("status") == "sql_ready" else "end", {"execute": "execute", "end": END})
+    graph.add_conditional_edges("revise", lambda s: "execute" if s.get("status") == "sql_ready" else "end", {"execute": "execute", "end": END})
     graph.add_conditional_edges("execute", route_execution, {"score": "score", "regenerate": "regenerate", "end": END})
-    graph.add_conditional_edges("score", route_score, {"review": "review", "end": END})
-    graph.add_conditional_edges("review", route_review, {"execute": "execute", "regenerate": "regenerate", "end": END})
+    graph.add_conditional_edges("score", route_score, {"review": "review", "finalize": "finalize"})
+    graph.add_conditional_edges("review", route_review, {"revise": "revise", "extract": "extract", "regenerate": "regenerate", "finalize": "finalize", "end": END})
+    graph.add_edge("finalize", END)
     return graph.compile(checkpointer=checkpointer)

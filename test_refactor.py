@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from catalog import FileCatalog
 from execute_sql import execute_readonly_sql
-from generate_sql import generate_sql
+from generate_sql import generate_sql, revise_sql
 from presentation import render_result_table
 from resources import IndexStores, _check_chroma_migrations, initialize_chroma
 from schema_linking import SchemaLinker
@@ -252,7 +252,9 @@ def test_sqlite_executor_and_terminal_rendering(tmp_path):
         "truncated": True,
         "error": None,
     }
-    assert render_result_table(result) == "id | name\n---+-----\n1  | 甲   \n仅显示前 1 行，后面还有数据。"
+    rendered = render_result_table(result)
+    assert all(value in rendered for value in ("id", "name", "甲", "仅显示前 1 行，还有更多数据。"))
+    assert "\x1b[" not in rendered
     assert execute_readonly_sql("DELETE FROM items", database)["status"] == "rejected"
     assert execute_readonly_sql("SELECT * FROM items WHERE id = 9", database)["rows"] == []
 
@@ -295,6 +297,24 @@ def test_generate_sql_uses_injected_model():
     assert seen[0][1].content == "问题"
 
 
+def test_revise_sql_passes_human_feedback_to_model():
+    """人工修改走模型生成链，提示词包含旧 SQL 与自然语言反馈。"""
+    from langchain_core.messages import AIMessage
+    from langchain_core.runnables import RunnableLambda
+
+    seen = []
+
+    def respond(messages):
+        seen.append(messages.to_messages())
+        return AIMessage(content="SELECT COUNT(DISTINCT order_id) FROM Orders")
+
+    sql = revise_sql("统计订单", "Table: Orders", "SELECT COUNT(*) FROM Orders", "按订单去重", RunnableLambda(respond))
+    assert sql == "SELECT COUNT(DISTINCT order_id) FROM Orders"
+    assert "Table: Orders" in seen[0][0].content
+    assert "SELECT COUNT(*) FROM Orders" in seen[0][1].content
+    assert "按订单去重" in seen[0][1].content
+
+
 def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
     """用途：确认命令行入口打印任务 ID、最终 SQL 和查询表格。
 
@@ -302,30 +322,50 @@ def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
     输出：None；断言图收到初始问题及完整的终端文本。
     """
     import main
+    from query_history import QueryHistory
 
     result = {"status": "success", "columns": ["id"], "rows": [[1]], "truncated": False, "error": None}
 
     class FakeGraph:
         """类用途：返回固定成功状态，隔离入口测试与真实图和模型。"""
 
-        def invoke(self, state, config):
+        def stream(self, state, config, stream_mode, subgraphs):
             """用途：核对入口传入的问题与任务 ID，并返回固定结果。
 
             参数输入：state 为初始状态，config 为图运行配置；输出：成功状态字典。
             """
-            assert state["question"] == "原始问题"
+            assert state["current_question"] == "原始问题"
             assert config["configurable"]["thread_id"] == "fixed-id"
-            return {"status": "success", "sql": "SELECT 1 AS id", "result": result}
+            assert stream_mode == "tasks" and subgraphs
+            yield (), {"id": "execute-1", "name": "execute", "input": state}
+            yield (), {"id": "execute-1", "name": "execute", "result": {"status": "success", "result": result}, "interrupts": []}
 
-    monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(tmp_path / "checkpoints.sqlite")])
-    monkeypatch.setattr("builtins.input", lambda _: "原始问题")
-    monkeypatch.setattr(main, "load_resources", lambda: object())
-    monkeypatch.setattr(main, "build_workflow", lambda resources, checkpointer: FakeGraph())
+        def get_state(self, config):
+            return SimpleNamespace(values={"messages": [], "turn_id": 1, "query_outcome":
+                {"status": "success", "record_turn_id": 1}}, tasks=[])
+
+    checkpoint = tmp_path / "checkpoints.sqlite"
+    QueryHistory(checkpoint).save("fixed-id", {
+        "turn_id": 1, "question": "原始问题", "rewrite_question": "完整问题",
+        "sql": "SELECT 1 AS id", "columns": result["columns"],
+        "rows": result["rows"], "truncated": False,
+    })
+    monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(checkpoint)])
+    answers = iter(["原始问题"])
+    def read(_):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError from None
+    monkeypatch.setattr("builtins.input", read)
+    monkeypatch.setattr(main, "create_llm", lambda: object())
+    monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args: FakeGraph())
     monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="fixed-id"))
     main.main()
-    assert capsys.readouterr().out == (
-        "任务 ID：fixed-id\n\n生成的 SQL：\nSELECT 1 AS id\n\n执行结果：\nid\n--\n1 \n"
-    )
+    output = capsys.readouterr().out
+    assert all(value in output for value in ("任务 ID：fixed-id", "执行过程", "执行 SQL", "SELECT 1 AS id", "查询结果", "返回 1 行"))
+    assert "\x1b[" not in output
 
 
 def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
@@ -339,31 +379,89 @@ def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
     class FakeGraph:
         """类用途：模拟带未处理澄清中断的检查点图。"""
 
+        resumed = False
+
         def get_state(self, config):
             """用途：返回指定任务 ID 的待处理澄清快照。
 
             参数输入：config 为图运行配置；输出：带 interrupts 的模拟快照。
             """
             assert config["configurable"]["thread_id"] == "saved-id"
-            return SimpleNamespace(tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"kind": "clarification", "question": "哪个月份？"})])])
+            if self.resumed:
+                return SimpleNamespace(values={"messages": [], "query_outcome": {"status": "cancelled"}, "session_closed": True}, tasks=[])
+            return SimpleNamespace(values={"messages": [], "current_question": "订单数量"}, tasks=[SimpleNamespace(interrupts=[SimpleNamespace(value={"kind": "clarification", "question": "哪个月份？"})])])
 
-        def invoke(self, command, config):
+        def stream(self, command, config, stream_mode, subgraphs):
             """用途：核对恢复命令和原任务 ID，并结束模拟查询。
 
             参数输入：command 为 Command.resume，config 为图配置；输出：结束状态。
             """
             assert command.resume == "上个月"
             assert config["configurable"]["thread_id"] == "saved-id"
-            return {"status": "error", "error": "测试结束"}
+            assert stream_mode == "tasks" and subgraphs
+            self.resumed = True
+            return iter(())
 
     monkeypatch.setattr("sys.argv", ["main.py", "--resume", "saved-id", "--checkpoint", str(tmp_path / "checkpoints.sqlite")])
     monkeypatch.setattr("builtins.input", lambda _: "上个月")
-    monkeypatch.setattr(main, "load_resources", lambda: object())
-    monkeypatch.setattr(main, "build_workflow", lambda resources, checkpointer: FakeGraph())
+    monkeypatch.setattr(main, "create_llm", lambda: object())
+    monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args: FakeGraph())
     main.main()
     output = capsys.readouterr().out
     assert "正在恢复任务：saved-id" in output
     assert "需要澄清：哪个月份？" in output
+
+
+@pytest.mark.parametrize(
+    ("letter", "feedback", "expected"),
+    [
+        ("a", None, {"decision": "approve"}),
+        ("B", "按客户去重", {"decision": "edit_sql", "feedback": "按客户去重"}),
+        ("c", "改用发票表", {"decision": "edit_schema", "feedback": "改用发票表"}),
+        ("D", None, {"decision": "reject"}),
+        ("e", None, {"decision": "exit"}),
+    ],
+)
+def test_review_menu_uses_letters_and_natural_language(monkeypatch, capsys, letter, feedback, expected):
+    """审核菜单接受大小写 A～E，修改选项只返回自然语言反馈。"""
+    import main
+
+    answers = iter([letter] + ([feedback] if feedback is not None else []))
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    result = main._request_feedback({"kind": "sql_review", "sql": "SELECT 1", "options": [
+        "approve", "edit_sql", "edit_schema", "reject", "exit",
+    ]})
+
+    assert result == expected
+    output = capsys.readouterr().out
+    assert "A. 通过" in output
+    assert "B. 重写 SQL" in output
+    assert "C. 重新选表" in output
+    assert "D. 拒绝" in output
+    assert "E. 退出" in output
+    assert "请输入修改后的完整 SQL" not in output
+
+
+def test_review_menu_hides_edits_at_limit_and_reprompts_empty_feedback(monkeypatch, capsys):
+    """菜单遵守图的可选项，并要求修改说明非空。"""
+    import main
+
+    answers = iter(["b", "E"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert main._request_feedback({"kind": "sql_review", "options": ["approve", "reject", "exit"]}) == {
+        "decision": "exit"
+    }
+    output = capsys.readouterr().out
+    assert "B. 重写 SQL" not in output
+    assert "请输入菜单中显示的选项字母。" in output
+
+    answers = iter(["B", "  ", "按订单去重"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    assert main._request_feedback({"kind": "sql_review"}) == {
+        "decision": "edit_sql", "feedback": "按订单去重"
+    }
+    assert "修改说明不能为空。" in capsys.readouterr().out
 
 
 def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_path):
@@ -416,22 +514,93 @@ def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_
         initialize_chroma(catalog, object(), tmp_path)
 
 
+def test_load_resources_separates_catalog_and_chroma_and_reads_config_once(monkeypatch, tmp_path):
+    """组装资源时复用同一份配置和 Catalog，并正确解析相对路径。"""
+    import resources
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "catalog_store:\n  store_type: file_system\n  data_path: catalog_data\n"
+        "vector_db_path: chroma_db\n"
+        "embedding_model:\n  class: langchain_openai.OpenAIEmbeddings\n"
+        "  params:\n    model: test-embedding\n"
+        "default_llm:\n  class: langchain_deepseek.ChatDeepSeek\n"
+        "  params:\n    api_key: test-key\n    model: test-chat\n",
+        encoding="utf-8",
+    )
+    read_config = resources._read_config
+    reads = []
+
+    def tracked_read(path):
+        reads.append(path)
+        return read_config(path)
+
+    catalog = object()
+    indexes = object()
+    calls = {}
+    monkeypatch.setattr(resources, "_read_config", tracked_read)
+
+    def fake_catalog(path):
+        calls["catalog_path"] = path
+        return catalog
+
+    monkeypatch.setattr(resources, "FileCatalog", fake_catalog)
+    monkeypatch.setattr(resources, "OpenAIEmbeddings", lambda **params: params)
+    monkeypatch.setattr(resources, "ChatDeepSeek", lambda **params: params)
+
+    def fake_initialize(given_catalog, embedding, path):
+        calls["chroma"] = (given_catalog, embedding, path)
+        return indexes
+
+    monkeypatch.setattr(resources, "initialize_chroma", fake_initialize)
+    result = resources.load_resources(config_path, tmp_path / "orders.sqlite")
+
+    assert reads == [config_path]
+    assert calls["catalog_path"] == tmp_path / "catalog_data"
+    assert result.catalog is catalog
+    assert calls["chroma"] == (catalog, {"model": "test-embedding"}, tmp_path / "chroma_db")
+    assert result.indexes is indexes
+    assert result.llm == {"api_key": "test-key", "model": "test-chat"}
+    assert result.database_path == tmp_path / "orders.sqlite"
+
+
+def test_create_llm_still_accepts_config_path(monkeypatch, tmp_path):
+    """独立创建模型时仍能从传入路径读取并校验配置。"""
+    import resources
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "default_llm:\n  class: langchain_deepseek.ChatDeepSeek\n"
+        "  params:\n    api_key: test-key\n    model: test-chat\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(resources, "ChatDeepSeek", lambda **params: params)
+
+    assert resources.create_llm(config_path) == {"api_key": "test-key", "model": "test-chat"}
+
+
 def test_chroma_version_mismatch_reports_clear_error(tmp_path):
-    """用途：验证旧版 Chroma 打开新版索引前给出可理解的错误。
+    """用途：验证预检认可当前运行库迁移，并拒绝未来版本的迁移。
 
     参数输入：tmp_path（pytest fixture）用于创建独立的迁移元数据数据库。
-    输出：None；断言错误指出本地迁移数量不足，而不启动 Rust 客户端。
+    输出：None；断言错误指出具体不受支持的迁移版本。
     """
-    from importlib import resources
+    import chromadb
+    import resources
+    from chromadb.config import Settings
 
-    available = sum(
-        item.name.endswith(".sql") for item in resources.files("chromadb").joinpath("migrations", "sysdb").iterdir()
-    )
-    database = tmp_path / "chroma.sqlite3"
+    current = tmp_path / "current"
+    chromadb.PersistentClient(path=str(current), settings=Settings(anonymized_telemetry=False))
+    _check_chroma_migrations(current)
+
+    available = max(version for directory, version in resources._runtime_chroma_migrations() if directory == "sysdb")
+    future = tmp_path / "future"
+    future.mkdir()
+    database = future / "chroma.sqlite3"
     with closing(sqlite3.connect(database)) as connection:
-        connection.execute("CREATE TABLE migrations (dir TEXT)")
-        connection.executemany("INSERT INTO migrations VALUES ('sysdb')", [()] * (available + 1))
+        connection.execute("CREATE TABLE migrations (dir TEXT, version INTEGER, hash TEXT)")
+        connection.execute("INSERT INTO migrations VALUES ('sysdb', ?, 'future')", (available + 1,))
         connection.commit()
 
-    with pytest.raises(RuntimeError, match=f"sysdb 已应用 {available + 1} 个迁移，本地只有 {available} 个"):
-        _check_chroma_migrations(tmp_path)
+    with pytest.raises(RuntimeError, match=f"sysdb 存在不受支持的第 {available + 1} 次迁移"):
+        _check_chroma_migrations(future)

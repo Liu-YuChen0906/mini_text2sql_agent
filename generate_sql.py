@@ -89,3 +89,19 @@ def regenerate_sql(question: str, schema: str, previous_sql: str, error: str, ll
         f"\nPrevious SQL: {previous_sql}\nSQLite error: {error}"
     )
     return generate_sql(feedback, schema, llm)
+
+
+def revise_sql(question: str, schema: str, previous_sql: str, human_feedback: str, llm: Any) -> str:
+    """用途：根据人工自然语言反馈重新生成 SQL，不直接使用用户提供的 SQL。
+
+    参数输入：question 是改写问题，schema 是当前表结构上下文，previous_sql
+        是待修改的 SQL，human_feedback 是用户对结果或 SQL 的自然语言说明，
+        llm 是复用的聊天模型。
+    输出：str，由模型重新生成并清理代码围栏的 SQL；此处不执行查询。
+    """
+    revision_request = (
+        f"{question}\n\nThe previous query needs revision based on human feedback. "
+        "Generate a new SQL query that addresses the feedback. Return SQL only."
+        f"\nPrevious SQL: {previous_sql}\nHuman feedback: {human_feedback}"
+    )
+    return generate_sql(revision_request, schema, llm)

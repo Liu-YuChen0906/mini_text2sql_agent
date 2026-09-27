@@ -3,7 +3,6 @@
 import json
 import re
 import sqlite3
-import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Any
 
 from catalog import FileCatalog
 from langchain_core.messages import HumanMessage, SystemMessage
+from presentation import create_console, show_notice
 from resources import IndexStores
 
 
@@ -126,7 +126,11 @@ def extract_question_for_graph(llm: Any, question: str) -> tuple[QuestionInfo | 
         "分析用户的数据查询问题。只返回 JSON 对象，包含 needs_clarification（布尔值）、"
         "clarification_question（字符串）、rewrite_question（字符串）、keywords、dimensions、metrics（三项字符串数组）。"
         "仅当缺失的信息会改变应查询的指标、筛选条件或数据范围时才要求澄清；"
-        "否则 needs_clarification 为 false，并忠实改写问题，不要臆造字段。",
+        "否则 needs_clarification 为 false，并忠实改写问题，不要臆造字段。"
+        "若提供按时间顺序排列的已完成查询历史，结合整个历史理解当前追问；"
+        "可引用较早的查询，但不要把历史中的旧条件无条件累加。"
+        "当前问题明确提出的新条件优先；独立新问题不继承历史条件。"
+        "rewrite_question 必须是可独立执行的完整问题，不要把历史原样附在前面。",
         question,
     )
     needs_clarification = result.get("needs_clarification")
@@ -198,7 +202,7 @@ def _related_columns(info: QuestionInfo, catalog: FileCatalog, column_store: Any
             if distance < 0.5 and doc.metadata.get("column_name") in known
         }
     except Exception as exc:
-        print(f"字段向量检索不可用，改用 Catalog 文本匹配：{type(exc).__name__}", file=sys.stderr)
+        show_notice(f"字段向量检索不可用，改用 Catalog 文本匹配：{type(exc).__name__}", "warning", console=create_console(stderr=True))
     for column in all_columns:
         names = [column.get(key, "") for key in ("column_name", "display_name", "alias", "tag", "description")]
         for term in terms:
@@ -257,7 +261,7 @@ def _selection_examples(info: QuestionInfo, catalog: FileCatalog, store: Any, ca
     try:
         found = store.max_marginal_relevance_search(query, k=5, fetch_k=20)
     except Exception as exc:
-        print(f"选表示例检索不可用：{type(exc).__name__}", file=sys.stderr)
+        show_notice(f"选表示例检索不可用：{type(exc).__name__}", "warning", console=create_console(stderr=True))
         return []
     return [
         f"Question: {doc.page_content}\nSelected tables: {', '.join(examples[doc.page_content])}"
