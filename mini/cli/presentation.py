@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-from execute_sql import QueryResult
+from mini.query.execute_sql import QueryResult
 from rich import box
 from rich.console import Console, Group, RenderableType
 from rich.padding import Padding

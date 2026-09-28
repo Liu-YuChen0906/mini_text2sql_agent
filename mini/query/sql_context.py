@@ -3,9 +3,9 @@
 import re
 from typing import Any
 
-from catalog import FileCatalog
-from schema_linking import LinkResult
-from presentation import create_console, show_notice
+from mini.query.catalog import FileCatalog
+from mini.query.schema_linking import LinkResult
+from mini.runtime.notices import show_retrieval_warning
 
 
 def _table_sections(link: LinkResult, catalog: FileCatalog) -> list[str]:
@@ -53,7 +53,7 @@ def _related_sql_examples(question: str, selected_tables: set[str], catalog: Fil
     try:
         found = store.max_marginal_relevance_search(question, k=5, fetch_k=20)
     except Exception as exc:
-        show_notice(f"SQL 示例检索不可用：{type(exc).__name__}", "warning", console=create_console(stderr=True))
+        show_retrieval_warning(f"SQL 示例检索不可用：{type(exc).__name__}")
         found = []
     for doc in found:
         if doc.page_content not in examples:

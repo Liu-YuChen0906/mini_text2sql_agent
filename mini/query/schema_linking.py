@@ -8,10 +8,10 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-from catalog import FileCatalog
+from mini.query.catalog import FileCatalog
 from langchain_core.messages import HumanMessage, SystemMessage
-from presentation import create_console, show_notice
-from resources import IndexStores
+from mini.runtime.notices import show_retrieval_warning
+from mini.runtime.resources import IndexStores
 
 
 @dataclass(frozen=True)
@@ -202,7 +202,7 @@ def _related_columns(info: QuestionInfo, catalog: FileCatalog, column_store: Any
             if distance < 0.5 and doc.metadata.get("column_name") in known
         }
     except Exception as exc:
-        show_notice(f"字段向量检索不可用，改用 Catalog 文本匹配：{type(exc).__name__}", "warning", console=create_console(stderr=True))
+        show_retrieval_warning(f"字段向量检索不可用，改用 Catalog 文本匹配：{type(exc).__name__}")
     for column in all_columns:
         names = [column.get(key, "") for key in ("column_name", "display_name", "alias", "tag", "description")]
         for term in terms:
@@ -261,7 +261,7 @@ def _selection_examples(info: QuestionInfo, catalog: FileCatalog, store: Any, ca
     try:
         found = store.max_marginal_relevance_search(query, k=5, fetch_k=20)
     except Exception as exc:
-        show_notice(f"选表示例检索不可用：{type(exc).__name__}", "warning", console=create_console(stderr=True))
+        show_retrieval_warning(f"选表示例检索不可用：{type(exc).__name__}")
         return []
     return [
         f"Question: {doc.page_content}\nSelected tables: {', '.join(examples[doc.page_content])}"

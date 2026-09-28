@@ -3,14 +3,14 @@
 import re
 from typing import Any, TypedDict
 
-from execute_sql import QueryResult, execute_readonly_sql
-from generate_sql import generate_sql, regenerate_sql, revise_sql
+from mini.query.execute_sql import QueryResult, execute_readonly_sql
+from mini.query.generate_sql import generate_sql, regenerate_sql, revise_sql
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
-from resources import RuntimeResources
-from schema_linking import LinkResult, QuestionInfo, SchemaLinker, SelectedTable, extract_question_for_graph
-from sql_context import build_sql_context
-from sql_quality import score_sql
+from mini.runtime.resources import RuntimeResources
+from mini.query.schema_linking import LinkResult, QuestionInfo, SchemaLinker, SelectedTable, extract_question_for_graph
+from mini.query.sql_context import build_sql_context
+from mini.query.sql_quality import score_sql
 
 MAX_SQL_RETRIES = 3
 MAX_CLARIFICATIONS = 2

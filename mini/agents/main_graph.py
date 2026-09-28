@@ -9,9 +9,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, InjectedToolArg, tool
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from query_history import QueryHistory, QueryRecord, history_index, selected_context
-from resources import RuntimeResources
-from text2sql_graph import build_text2sql_graph, new_text2sql_turn
+from mini.runtime.query_history import QueryHistory, QueryRecord, history_index, selected_context
+from mini.runtime.resources import RuntimeResources
+from mini.agents.text2sql_graph import build_text2sql_graph, new_text2sql_turn
 
 
 class AgentState(MessagesState):

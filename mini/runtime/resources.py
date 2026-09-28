@@ -9,13 +9,13 @@ from tempfile import TemporaryDirectory
 
 import chromadb
 import yaml
-from catalog import FileCatalog
+from mini.query.catalog import FileCatalog
 from chromadb.config import Settings
 from langchain_chroma import Chroma
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import OpenAIEmbeddings
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = PROJECT_DIR / "config.yaml"
 DATABASE_PATH = PROJECT_DIR / "data" / "tracking_orders.sqlite"
 

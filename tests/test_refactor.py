@@ -8,15 +8,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from catalog import FileCatalog
-from execute_sql import execute_readonly_sql
-from generate_sql import generate_sql, revise_sql
-from presentation import render_result_table
-from resources import IndexStores, _check_chroma_migrations, initialize_chroma
-from schema_linking import SchemaLinker
-from sql_context import build_sql_context
+from mini.query.catalog import FileCatalog
+from mini.query.execute_sql import execute_readonly_sql
+from mini.query.generate_sql import generate_sql, revise_sql
+from mini.cli.presentation import render_result_table
+from mini.runtime.resources import IndexStores, _check_chroma_migrations, initialize_chroma
+from mini.query.schema_linking import SchemaLinker
+from mini.query.sql_context import build_sql_context
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
 class FakeLLM:
@@ -170,7 +170,7 @@ def test_no_candidate_table(monkeypatch):
     参数输入：monkeypatch（pytest fixture）替换字段匹配结果为空间外字段。
     输出：None；断言原有异常文本及仅发生一次模型调用。
     """
-    import schema_linking
+    from mini.query import schema_linking
 
     linker, llm, _ = make_linker([question_response()])
     monkeypatch.setattr(schema_linking, "_related_columns", lambda *_: {"not_a_real_column"})
@@ -204,7 +204,7 @@ def test_link_from_info_does_not_extract_again(monkeypatch):
     参数输入：monkeypatch（pytest fixture）把重复提取替换为测试失败。
     输出：None；断言选表成功且模型只调用一次。
     """
-    import schema_linking
+    from mini.query import schema_linking
 
     linker, llm, _ = make_linker([selection_response()])
     monkeypatch.setattr(schema_linking, "extract_question", lambda *_: pytest.fail("duplicate extraction"))
@@ -321,8 +321,9 @@ def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
     参数输入：pytest 的替换工具、输出捕获工具和临时目录。
     输出：None；断言图收到初始问题及完整的终端文本。
     """
-    import main
-    from query_history import QueryHistory
+    from mini.cli import main
+
+    from mini.runtime.query_history import QueryHistory
 
     result = {"status": "success", "columns": ["id"], "rows": [[1]], "truncated": False, "error": None}
 
@@ -374,7 +375,7 @@ def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
     参数输入：pytest 的替换工具、输出捕获工具和临时目录。
     输出：None；断言恢复值和终端澄清提示。
     """
-    import main
+    from mini.cli import main
 
     class FakeGraph:
         """类用途：模拟带未处理澄清中断的检查点图。"""
@@ -425,7 +426,7 @@ def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
 )
 def test_review_menu_uses_letters_and_natural_language(monkeypatch, capsys, letter, feedback, expected):
     """审核菜单接受大小写 A～E，修改选项只返回自然语言反馈。"""
-    import main
+    from mini.cli import main
 
     answers = iter([letter] + ([feedback] if feedback is not None else []))
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
@@ -445,7 +446,7 @@ def test_review_menu_uses_letters_and_natural_language(monkeypatch, capsys, lett
 
 def test_review_menu_hides_edits_at_limit_and_reprompts_empty_feedback(monkeypatch, capsys):
     """菜单遵守图的可选项，并要求修改说明非空。"""
-    import main
+    from mini.cli import main
 
     answers = iter(["b", "E"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
@@ -470,7 +471,7 @@ def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_
     参数输入：monkeypatch（pytest fixture）替换 Chroma；tmp_path 提供索引路径。
     输出：None；断言带名称的集合可访问，文档不一致时仍抛 RuntimeError。
     """
-    import resources
+    from mini.runtime import resources
 
     catalog = FileCatalog(PROJECT_DIR / "catalog_data")
     expected = {
@@ -516,7 +517,7 @@ def test_chroma_collections_keep_names_and_existing_index_rule(monkeypatch, tmp_
 
 def test_load_resources_separates_catalog_and_chroma_and_reads_config_once(monkeypatch, tmp_path):
     """组装资源时复用同一份配置和 Catalog，并正确解析相对路径。"""
-    import resources
+    from mini.runtime import resources
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -566,7 +567,7 @@ def test_load_resources_separates_catalog_and_chroma_and_reads_config_once(monke
 
 def test_create_llm_still_accepts_config_path(monkeypatch, tmp_path):
     """独立创建模型时仍能从传入路径读取并校验配置。"""
-    import resources
+    from mini.runtime import resources
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -586,7 +587,8 @@ def test_chroma_version_mismatch_reports_clear_error(tmp_path):
     输出：None；断言错误指出具体不受支持的迁移版本。
     """
     import chromadb
-    import resources
+    from mini.runtime import resources
+
     from chromadb.config import Settings
 
     current = tmp_path / "current"

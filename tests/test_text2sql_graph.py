@@ -6,11 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import text2sql_graph
+from mini.agents import text2sql_graph
+
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
-from schema_linking import LinkResult, QuestionInfo, SelectedTable, extract_question_for_graph
-from sql_quality import QualityScore, score_sql
+from mini.query.schema_linking import LinkResult, QuestionInfo, SelectedTable, extract_question_for_graph
+from mini.query.sql_quality import QualityScore, score_sql
 
 
 def _success():

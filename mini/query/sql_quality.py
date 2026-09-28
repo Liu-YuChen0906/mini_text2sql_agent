@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from schema_linking import _model_json
+from mini.query.schema_linking import _model_json
 
 
 @dataclass(frozen=True)

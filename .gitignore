@@ -5,4 +5,7 @@ __pycache__/
 .DS_Store
 chroma_db/
 checkpoints.sqlite*
+web_checkpoints.sqlite*
+frontend/node_modules/
+frontend/dist/
 .coverage*

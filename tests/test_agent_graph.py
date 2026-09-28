@@ -5,14 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agent_graph import build_agent_graph, create_text2sql_tool, new_agent_turn
+from mini.agents.main_graph import build_agent_graph, create_text2sql_tool, new_agent_turn
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
-from query_history import QueryHistory
-from schema_linking import QuestionInfo
-from sql_quality import QualityScore
-from test_text2sql_graph import _error, _make_graph, _success
+from mini.runtime.query_history import QueryHistory
+from mini.query.schema_linking import QuestionInfo
+from mini.query.sql_quality import QualityScore
+from tests.test_text2sql_graph import _error, _make_graph, _success
 
 
 def _tool_call(turn_id, history_ids=None):

@@ -5,17 +5,19 @@ import re
 import shlex
 from types import SimpleNamespace
 
-import main
-import presentation as ui
+from mini.cli import main
+
+from mini.cli import presentation as ui
+
 import pytest
 from langchain_core.messages import AIMessage
 from langgraph.types import Command
 from rich.cells import cell_len
 from rich.console import Console
-from schema_linking import QuestionInfo
-from sql_quality import QualityScore
-from test_text2sql_graph import _error, _success
-from test_agent_graph import FakeRoutingLLM, _parent, _tool_call
+from mini.query.schema_linking import QuestionInfo
+from mini.query.sql_quality import QualityScore
+from tests.test_text2sql_graph import _error, _success
+from tests.test_agent_graph import FakeRoutingLLM, _parent, _tool_call
 
 
 def capture(width=80):
@@ -163,7 +165,7 @@ def test_real_graph_stream_reports_nodes_and_retry_without_duplicate_execution(t
     )
     console, output = capture(100)
     try:
-        from agent_graph import new_agent_turn
+        from mini.agents.main_graph import new_agent_turn
         snapshot = main._run_agent_graph(graph, new_agent_turn("How many orders?", 1),
                                          {"configurable": {"thread_id": "retry"}}, console=console)
         assert snapshot.values["query_outcome"]["status"] == "success"
@@ -183,7 +185,7 @@ def test_stream_resume_after_sqlite_reopen(tmp_path, monkeypatch, kind):
     graph, connection, _, calls = _parent(tmp_path, monkeypatch, FakeRoutingLLM([_tool_call(1)]), **setup)
     config = {"configurable": {"thread_id": kind}}
     console, output = capture(100)
-    from agent_graph import new_agent_turn
+    from mini.agents.main_graph import new_agent_turn
     first = main._run_agent_graph(graph, new_agent_turn("How many orders?", 1), config, console=console)
     assert main._pending_payload(first)["kind"] == kind
     assert "等待输入" in output.getvalue() and "查询完成" not in output.getvalue()
