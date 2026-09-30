@@ -82,7 +82,7 @@ def create_app(service_factory: Callable[[], WebSessionService] | None = None) -
     async def send_message(session_id: str, body: MessageInput):
         """提交一轮用户问题；相同请求 ID 可安全查询已有结果。"""
         return await call(service().send_message, session_id, body.content, body.request_id)
-
+      
     @app.post("/api/sessions/{session_id}/resume")
     async def resume(session_id: str, body: ResumeInput):
         """提交澄清回答或人工审核决定，继续同一轮图执行。"""

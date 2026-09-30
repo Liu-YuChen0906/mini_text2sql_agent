@@ -264,7 +264,21 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
         <div ref="bottom"></div>
       </div>
       <footer class="composer-wrap">
-        <div class="composer"><textarea v-model="draft" rows="2" :disabled="!current || current.status !== 'idle' || busy" :placeholder="current?.status === 'pending' ? '请先处理上方的澄清或审核' : current?.status === 'closed' ? '会话已结束' : '输入问题，按 Enter 发送…'" @keydown="onComposerKeydown"></textarea><button class="send-button" aria-label="发送消息" :disabled="!draft.trim() || !current || current.status !== 'idle' || busy" @click="submitMessage">↑</button></div>
+        <div class="composer">
+          <textarea
+            v-model="draft"
+            rows="2"
+            :disabled="!current || current.status !== 'idle' || busy"
+            :placeholder="current?.status === 'pending' ? '请先处理上方的澄清或审核' : current?.status === 'closed' ? '会话已结束' : '输入问题，按 Enter 发送…'"
+            @keydown="onComposerKeydown"
+          ></textarea>
+          <button
+            class="send-button"
+            aria-label="发送消息"
+            :disabled="!draft.trim() || !current || current.status !== 'idle' || busy"
+            @click="submitMessage"
+          >↑</button>
+        </div>
         <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
       </footer>
     </main>
