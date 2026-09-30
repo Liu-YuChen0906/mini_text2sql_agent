@@ -30,6 +30,11 @@ const error = ref('')
 const bottom = ref<HTMLElement | null>(null)
 let poll: ReturnType<typeof setInterval> | undefined
 
+function newRequestId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 const currentId = computed(() => current.value?.id || '')
 const statusLabel: Record<Status, string> = {
   idle: '就绪', running: '执行中', pending: '等待回复', interrupted: '执行中断', closed: '已结束',
@@ -95,7 +100,7 @@ async function submitMessage() {
   error.value = ''
   draft.value = ''
   // Keep the same ID for this one attempt; a failed network response is reconciled by reading the session.
-  const requestId = crypto.randomUUID()
+  const requestId = newRequestId()
   try {
     const request = api<Session>(`/api/sessions/${id}/messages`, {
       method: 'POST', body: JSON.stringify({ content, request_id: requestId }),
@@ -123,7 +128,7 @@ async function submitPending() {
   const pending = current.value?.pending
   if (!id || !pending || busy.value) return
   const payload: Record<string, string> = {
-    interaction_id: pending.id, request_id: crypto.randomUUID(),
+    interaction_id: pending.id, request_id: newRequestId(),
   }
   if (pending.kind === 'clarification') {
     if (!answer.value.trim()) return
