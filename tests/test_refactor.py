@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from mini.query.catalog import FileCatalog
 from mini.query.execute_sql import execute_readonly_sql
+from mini.query.sqlite_adapter import SQLiteAdapter
 from mini.query.generate_sql import generate_sql, revise_sql
 from mini.cli.presentation import render_result_table
 from mini.runtime.resources import IndexStores, _check_chroma_migrations, initialize_chroma
@@ -100,7 +101,7 @@ def make_linker(responses, *, fail=False):
         FakeStore(["Show order status and customer information"], fail=fail),
         FakeStore(["Find all pending orders with customer information"], fail=fail),
     )
-    linker = SchemaLinker(catalog, indexes, llm, PROJECT_DIR / "data" / "tracking_orders.sqlite")
+    linker = SchemaLinker(catalog, indexes, llm, SQLiteAdapter(PROJECT_DIR / "data" / "tracking_orders.sqlite"))
     return linker, llm, indexes
 
 
@@ -295,6 +296,8 @@ def test_generate_sql_uses_injected_model():
     assert generate_sql("问题", "Table: Orders", RunnableLambda(respond)) == "SELECT 1"
     assert "Schema:\nTable: Orders" in seen[0][0].content
     assert seen[0][1].content == "问题"
+    assert generate_sql("问题", "Table: Orders", RunnableLambda(respond), "postgres") == "SELECT 1"
+    assert "postgres SELECT query" in seen[1][0].content
 
 
 def test_revise_sql_passes_human_feedback_to_model():
@@ -562,7 +565,8 @@ def test_load_resources_separates_catalog_and_chroma_and_reads_config_once(monke
     assert calls["chroma"] == (catalog, {"model": "test-embedding"}, tmp_path / "chroma_db")
     assert result.indexes is indexes
     assert result.llm == {"api_key": "test-key", "model": "test-chat"}
-    assert result.database_path == tmp_path / "orders.sqlite"
+    assert isinstance(result.adapter, SQLiteAdapter)
+    assert result.adapter.path == tmp_path / "orders.sqlite"
 
 
 def test_create_llm_still_accepts_config_path(monkeypatch, tmp_path):

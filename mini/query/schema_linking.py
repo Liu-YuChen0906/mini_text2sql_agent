@@ -2,13 +2,12 @@
 
 import json
 import re
-import sqlite3
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from pathlib import Path
 from typing import Any
 
 from mini.query.catalog import FileCatalog
+from mini.query.database import DatabaseAdapter
 from langchain_core.messages import HumanMessage, SystemMessage
 from mini.runtime.notices import show_retrieval_warning
 from mini.runtime.resources import IndexStores
@@ -142,31 +141,6 @@ def extract_question_for_graph(llm: Any, question: str) -> tuple[QuestionInfo | 
             raise ValueError("需要澄清时必须提供 clarification_question。")
         return None, clarification.strip()
     return _question_info_from_json(result), None
-
-
-def database_columns(database_path: str | Path) -> dict[str, set[str]]:
-    """用途：从 SQLite 只读连接取得真实表名和字段名，供后续校验。
-
-    参数输入：
-        database_path（str | Path）：现有 SQLite 数据库文件路径，以只读 URI 打开。
-    输出：
-        dict[str, set[str]]：键是 sqlite_master 中的业务表名，值是通过
-            PRAGMA table_info 读出的真实字段名集合；过滤 sqlite_ 开头的系统表。
-            此结果用于核对 Catalog 和模型选择，不把 CREATE TABLE 文本传给模型。
-    """
-    path = Path(database_path).resolve()
-    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as connection:
-        tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        ]
-        result = {}
-        for table in tables:
-            quoted_table = table.replace('"', '""')
-            result[table] = {row[1] for row in connection.execute(f'PRAGMA table_info("{quoted_table}")')}
-        return result
 
 
 def _related_columns(info: QuestionInfo, catalog: FileCatalog, column_store: Any) -> set[str]:
@@ -338,24 +312,24 @@ def _selection_prompt(catalog: FileCatalog, candidates: dict[str, list[dict[str,
 class SchemaLinker:
     """类用途：调度从自然语言问题到真实表与字段的选择流程。
 
-    支持功能：复用 Catalog、索引、模型及 SQLite 路径；按问题提取、真实字段
+    支持功能：复用 Catalog、索引、模型及数据库适配器；按问题提取、真实字段
     读取、候选检索、模型选表和结果校验的顺序执行。具体判断由独立函数完成。
     """
 
-    def __init__(self, catalog: FileCatalog, indexes: IndexStores, llm: Any, database_path: str | Path) -> None:
+    def __init__(self, catalog: FileCatalog, indexes: IndexStores, llm: Any, adapter: DatabaseAdapter) -> None:
         """用途：保存多次选表调用可以复用的依赖。
 
         参数输入：
             catalog（FileCatalog）：表、字段和选表示例的业务目录。
             indexes（IndexStores）：提供字段与选表示例向量集合。
             llm（Any）：实现 invoke(messages) 的聊天模型。
-            database_path（str | Path）：供真实字段校验的 SQLite 文件路径。
+            adapter（DatabaseAdapter）：供真实字段校验的业务数据库入口。
         输出：None；只初始化属性，不发起模型请求或数据库查询。
         """
         self.catalog = catalog
         self.indexes = indexes
         self.llm = llm
-        self.database_path = database_path
+        self.adapter = adapter
 
     def link(self, question: str) -> LinkResult:
         """用途：完成一次问题提取、候选检索、模型选表和校验。
@@ -375,7 +349,7 @@ class SchemaLinker:
         输出：LinkResult，包含改写问题、已选表字段及数据库真实字段集合。
         异常：无候选表或模型两次选表都无效时抛 ValueError。
         """
-        real = database_columns(self.database_path)
+        real = self.adapter.list_columns(self.catalog.get_table_list())
         matched = _related_columns(info, self.catalog, self.indexes.columns)
         candidates = _candidate_tables(self.catalog, matched, real)
         if not candidates:

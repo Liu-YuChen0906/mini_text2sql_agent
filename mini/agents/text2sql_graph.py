@@ -1,9 +1,8 @@
 """用 LangGraph 编排 Mini Text2SQL 的澄清、选表、执行修复与人工审核。"""
 
-import re
 from typing import Any, TypedDict
 
-from mini.query.execute_sql import QueryResult, execute_readonly_sql
+from mini.query.database import QueryResult
 from mini.query.generate_sql import generate_sql, regenerate_sql, revise_sql
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -15,11 +14,6 @@ from mini.query.sql_quality import score_sql
 MAX_SQL_RETRIES = 3
 MAX_CLARIFICATIONS = 2
 CONFIDENCE_THRESHOLD = 0.7
-REPAIRABLE_ERROR = re.compile(
-    r"syntax error|no such (?:table|column|function)|ambiguous column|misuse of aggregate|"
-    r"wrong number of arguments|incomplete input",
-    re.IGNORECASE,
-)
 
 
 class SQLState(TypedDict, total=False):
@@ -42,6 +36,7 @@ class SQLState(TypedDict, total=False):
     sql_context: str
     sql: str
     result: QueryResult | None
+    repairable_error: bool
     errors: list[dict[str, str]]
     retry_count: int
     human_feedback: str
@@ -68,6 +63,7 @@ def new_text2sql_turn(question: str, *, context: str = "") -> SQLState:
         "sql_context": "",
         "sql": "",
         "result": None,
+        "repairable_error": False,
         "errors": [],
         "retry_count": 0,
         "human_feedback": "",
@@ -95,11 +91,11 @@ def _link_result(state: SQLState) -> LinkResult:
 def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     """用途：用已初始化资源构建并编译可暂停、可恢复的 Text2SQL 状态图。
 
-    参数输入：resources 包含 Catalog、索引、模型和 SQLite 路径；checkpointer
+    参数输入：resources 包含 Catalog、索引、模型和业务数据库适配器；checkpointer
         用于保存图状态，供澄清和人工审核后按任务 ID 恢复。
     输出：已编译的 LangGraph 图；各节点返回局部状态更新，条件边负责选择下一步。
     """
-    linker = SchemaLinker(resources.catalog, resources.indexes, resources.llm, resources.database_path)
+    linker = SchemaLinker(resources.catalog, resources.indexes, resources.llm, resources.adapter)
 
     def extract_node(state: SQLState) -> dict[str, Any]:
         """用途：拼接原问题与补充回答，让模型决定澄清或提取查询信息。
@@ -185,7 +181,7 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         输出：sql_context 文本及 context_ready 状态；失败时返回错误状态。
         """
         try:
-            context = build_sql_context(_link_result(state), resources.catalog, resources.indexes.text2sql)
+            context = build_sql_context(_link_result(state), resources.catalog, resources.indexes.text2sql, resources.adapter.dialect)
         except Exception as exc:
             return {"status": "error", "error": f"SQL 上下文构造失败：{exc}"}
         return {"status": "context_ready", "sql_context": context}
@@ -197,7 +193,7 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         输出：非空 SQL 与 sql_ready 状态；模型异常或空结果转为错误状态。
         """
         try:
-            sql = generate_sql(state["rewrite_question"], state["sql_context"], resources.llm)
+            sql = generate_sql(state["rewrite_question"], state["sql_context"], resources.llm, resources.adapter.dialect)
         except Exception as exc:
             return {"status": "error", "error": f"SQL 生成失败：{exc}"}
         if not sql or sql.lower() == "null":
@@ -213,7 +209,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         previous = state["errors"][-1]
         try:
             sql = regenerate_sql(
-                state["rewrite_question"], state["sql_context"], previous["sql"], previous["error"], resources.llm
+                state["rewrite_question"], state["sql_context"], previous["sql"], previous["error"], resources.llm,
+                resources.adapter.dialect,
             )
         except Exception as exc:
             return {"status": "error", "error": f"SQL 修复失败：{exc}"}
@@ -229,7 +226,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             sql = revise_sql(
-                state["rewrite_question"], state["sql_context"], state["sql"], state["human_feedback"], resources.llm
+                state["rewrite_question"], state["sql_context"], state["sql"], state["human_feedback"], resources.llm,
+                resources.adapter.dialect,
             )
         except Exception as exc:
             return {"status": "error", "error": f"人工反馈后的 SQL 重写失败：{exc}"}
@@ -240,14 +238,17 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     def execute_node(state: SQLState) -> dict[str, Any]:
         """用途：通过只读执行器运行当前 SQL，并记录结果或错误。
 
-        参数输入：state 的 sql 是当前待运行语句；数据库路径来自闭包资源。
+        参数输入：state 的 sql 是当前待运行语句；适配器来自闭包资源。
         输出：result 与其 status；非成功结果还会追加 errors，异常转为 fatal。
         """
         try:
-            result = execute_readonly_sql(state["sql"], resources.database_path)
+            outcome = resources.adapter.execute_readonly(state["sql"])
         except Exception as exc:
             return {"status": "fatal", "error": f"SQL 执行失败：{exc}"}
-        update: dict[str, Any] = {"result": result, "status": result["status"]}
+        result = outcome.result
+        update: dict[str, Any] = {
+            "result": result, "status": result["status"], "repairable_error": outcome.repairable,
+        }
         if result["status"] != "success":
             update["errors"] = [
                 *state.get("errors", []),
@@ -259,16 +260,14 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """用途：按执行结果决定评分、有限次修复或结束。
 
         参数输入：state 含执行 status、result 错误信息及 retry_count。
-        输出：str，取 score、regenerate 或 end；仅指定的 SQLite 错误可重试。
+        输出：str，取 score、regenerate 或 end；仅适配器标记的错误可重试。
         """
         if state.get("status") == "success":
             return "score"
         if state.get("status") != "error":
             return "end"
-        result = state.get("result") or {}
         if (
-            result.get("status") == "error"
-            and REPAIRABLE_ERROR.search(result.get("error") or "")
+            state.get("repairable_error")
             and state.get("retry_count", 0) < MAX_SQL_RETRIES
         ):
             return "regenerate"

@@ -12,6 +12,16 @@ catalog_store:
   store_type: file_system
   data_path: catalog_data
 vector_db_path: chroma_db
+
+# 业务数据库。省略本段时使用 data/tracking_orders.sqlite。
+database:
+  type: sqlite
+  path: data/tracking_orders.sqlite
+# 切换到 PostgreSQL 时改为：
+# database:
+#   type: postgres
+#   url_env: MINI_DATABASE_URL
+# 并在启动前设置 MINI_DATABASE_URL（连接串只放在环境变量中）。
 embedding_model:
   class: langchain_openai.OpenAIEmbeddings
   params:

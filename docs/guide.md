@@ -1,6 +1,6 @@
 # Mini OpenChatBI Agent
 
-这是一个独立的命令行项目。持续运行的主 Agent 保存会话消息，判断用户是在普通交流，还是需要调用 Text2SQL 查询子图。子图使用 LangGraph 编排问题澄清、Schema Linking、SQL 生成、执行错误修复与低置信度人工审核。Catalog、Chroma 和只读 SQLite 执行器仍由原模块提供。它有自己的 Git 仓库，不依赖外层 `openchatbi` 项目的 Python 包或运行配置。
+这是一个独立的命令行项目。持续运行的主 Agent 保存会话消息，判断用户是在普通交流，还是需要调用 Text2SQL 查询子图。子图使用 LangGraph 编排问题澄清、Schema Linking、SQL 生成、执行错误修复与低置信度人工审核。业务数据库通过统一适配层接入，当前提供 SQLite 和 PostgreSQL 实现。它有自己的 Git 仓库，不依赖外层 `openchatbi` 项目的 Python 包或运行配置。
 
 ## 目前项目的整体流程
 
@@ -12,7 +12,7 @@
   → 子图提取问题信息；必要时暂停询问用户，恢复后重新提取
   → Schema Linking：匹配字段、筛选候选表、选择表和字段
   → 拼接表结构、业务规则及相似 SQL 示例
-  → 生成 SQLite SQL
+  → 按业务数据库方言生成 SQL
   → 只读执行 SQL；可修复错误最多重试 3 次
   → 执行成功后评分；低于 0.7 或评分失败时暂停人工审核
   → 人工可通过、用自然语言反馈重写 SQL 或重新选表、拒绝或退出
@@ -22,11 +22,11 @@
 
 入口是 [`main.py`](../mini/cli/main.py)，持续会话的主图定义在 [`agent_graph.py`](../mini/agents/main_graph.py)，单轮 Text2SQL 子图由 [`text2sql_graph.py`](../mini/agents/text2sql_graph.py) 中的 `build_text2sql_graph()` 构建。主图中的 `run_text2sql` 是可执行工具：模型只填写历史轮次 ID，主图注入当前问题和任务配置；工具运行子图并在成功后保存记录。[`query_history.py`](../mini/runtime/query_history.py) 在检查点 SQLite 文件中另建 `successful_queries` 表，以会话 ID 和轮次 ID 保存成功查询。主图检查点仅保留成功记录 ID 和本轮摘要，展示时从历史表读取完整 SQL 与结果；子图检查点仍可保存审核恢复所需的执行状态。同一任务 ID 对应一个持续会话；旧版单图任务暂不迁移，其检查点文件保留。
 
-主 Agent 的模型只有 `run_text2sql` 一个数据工具。需要数据库事实时必须调用该工具；普通交流可直接回复。主图每轮读取有长度上限的历史摘要和结果预览，按轮次 ID 取被引用旧表的已保存行交给子图。每次数据问题都重新生成并执行本轮 SQL，不把旧表写入业务 SQLite。成功记录包含原始问题、完整改写、最终 SQL、列名、实际返回的行及截断标记；失败轮不入库。历史保存的行最多为执行器实际返回的 100 行，并非数据库的全部匹配行。
+主 Agent 的模型只有 `run_text2sql` 一个数据工具。需要数据库事实时必须调用该工具；普通交流可直接回复。主图每轮读取有长度上限的历史摘要和结果预览，按轮次 ID 取被引用旧表的已保存行交给子图。每次数据问题都重新生成并执行本轮 SQL，不把旧表写入业务数据库。成功记录包含原始问题、完整改写、最终 SQL、列名、实际返回的行及截断标记；失败轮不入库。历史保存的行最多为执行器实际返回的 100 行，并非数据库的全部匹配行。
 
 ### 1. 准备资源
 
-[`resources.py`](../mini/runtime/resources.py) 从本地 `config.yaml` 读取配置。启动时只创建主 Agent 的 DeepSeek 聊天模型；第一次数据查询才加载 Catalog、三个 Chroma 索引和 SQLite 路径，后续查询复用这些资源：
+[`resources.py`](../mini/runtime/resources.py) 从本地 `config.yaml` 读取配置。启动时只创建主 Agent 的 DeepSeek 聊天模型；第一次数据查询才加载 Catalog、三个 Chroma 索引和业务数据库适配器，后续查询复用这些资源：
 
 | 资源 | 来源 | 用途 |
 | --- | --- | --- |
@@ -34,7 +34,7 @@
 | `columns` 索引 | 本地 `chroma_db/` | 按相似度寻找可能相关的字段 |
 | `table_selection_example` 索引 | 本地 `chroma_db/` | 寻找相似的选表示例 |
 | `text2sql` 索引 | 本地 `chroma_db/` | 寻找相似的 SQL 示例 |
-| SQLite 数据库 | `data/tracking_orders.sqlite` | 保存实际客户、订单等数据，供最终查询 |
+| 业务数据库 | 默认 `data/tracking_orders.sqlite`，可配置 PostgreSQL | 保存实际客户、订单等数据，供最终查询 |
 
 三个 Chroma 集合的文档会与 Catalog 核对；正常查询默认只打开已有索引，不自动建索引。若 Chroma 数据库使用了比当前安装版本更新的迁移，普通聊天仍可运行，首次数据查询会给出明确错误。`config.yaml`、`chroma_db/` 都不提交到 Git。
 
@@ -55,23 +55,23 @@ QuestionInfo(
 
 ### 3. Schema Linking：找字段、筛表、选表
 
-1. 用 SQLite 的 `sqlite_master` 和 `PRAGMA table_info` 读取真实存在的表及字段，之后只允许使用 Catalog 和数据库中都存在的字段。
+1. 通过业务数据库适配器读取真实存在的表及字段，之后只允许使用 Catalog 和数据库中都存在的字段。
 2. 把 `keywords`、`dimensions`、`metrics` 中的非空词合成一次字段检索文本；全为空时使用 `rewrite_question`。对 `columns` 索引取前 12 条，只接收距离小于 `0.5` 且字段名存在于 Catalog 的结果；同时用 Catalog 中的字段名、显示名、别名、标签和描述做文本包含及相似度匹配，相似度门槛为 `0.8`。向量检索失败时仍继续文本匹配。
 3. 从 Catalog 中筛出真实数据库存在、且至少包含一个相关字段的候选表。如果一个字段也没命中，则不按相关性过滤候选表；若仍没有候选表就报错。
 4. 在 `table_selection_example` 中检索相似问题（`k=5, fetch_k=20`），只保留其示例表全部位于候选表集合中的示例。
 5. 把候选表、字段说明、选表规则、相似示例和改写问题交给模型。模型返回所选表及字段；程序核对表和字段必须在候选范围内。无效结果会携带错误原因重试一次。图调用 `link_from_info`，不会再次提取问题。
 
-这一步输出 `LinkResult`：`rewrite_question`、通过校验的 `selected` 表及字段、SQLite 中真实存在的 `real` 字段集合。**它还没有生成 SQL。**
+这一步输出 `LinkResult`：`rewrite_question`、通过校验的 `selected` 表及字段、业务数据库中真实存在的 `real` 字段集合。**它还没有生成 SQL。**
 
 ### 4. 构造 SQL 上下文并生成 SQL
 
 [`sql_context.py`](../mini/query/sql_context.py) 为每张已选表整理描述、相关字段、全部可用且真实存在的字段、派生指标说明和 SQL 规则；再用改写后的问题从 `text2sql` 检索相似 SQL 示例（`k=5, fetch_k=20`）。示例涉及的表必须都在已选表中。
 
-[`generate_sql.py`](../mini/query/generate_sql.py) 把改写问题和这段上下文交给同一个聊天模型，要求只返回一条 SQLite `SELECT` 查询。代码会移除可能出现的 Markdown 代码围栏；生成阶段仍不验证 SQL 的业务正确性。
+[`generate_sql.py`](../mini/query/generate_sql.py) 把改写问题、数据库方言和上下文交给同一个聊天模型，要求只返回一条 `SELECT` 查询。代码会移除可能出现的 Markdown 代码围栏；生成阶段仍不验证 SQL 的业务正确性。
 
 ### 5. 执行与展示
 
-[`execute_sql.py`](../mini/query/execute_sql.py) 只接受首词为 `SELECT` 或 `WITH` 的一条语句，并以 SQLite `mode=ro` 打开数据库。默认超时为 2 秒，最多返回 100 行；为了判断是否截断，会额外读取第 101 行。返回字典含 `status`、`columns`、`rows`、`truncated` 和 `error`。
+业务数据库适配器只接受单条 `SELECT` 或 `WITH` 查询。SQLite 使用只读文件连接；PostgreSQL 使用只读事务。默认超时为 2 秒，最多返回 100 行；为了判断是否截断，会额外读取第 101 行。返回字典含 `status`、`columns`、`rows`、`truncated` 和 `error`。
 
 图只对可修复的语法、字段、表、函数及聚合错误尝试重新生成 SQL，每轮最多重试 3 次；超时和被拒绝的查询结束当前轮。成功执行后，[`sql_quality.py`](../mini/query/sql_quality.py) 请模型按问题、字段含义、SQL 和结果预览评分。低于 `0.7` 或评分失败时，图暂停显示 A 通过、B 重写 SQL、C 重新选表、D 拒绝、E 退出。B、C 接收自然语言修改说明，不接收用户提供的 SQL：B 让模型在当前表结构上下文中重写 SQL，C 重新提取问题并选表，再生成 SQL。人工修改不限次数，每次修改后重新执行和评分；D 沿用本轮自动修复次数限制，E 结束整个会话。评分是审核线索，不保证业务答案正确。
 
@@ -187,7 +187,7 @@ python -m pytest -q -o addopts='' tests/test_refactor.py tests/test_text2sql_gra
 
 ## 本地网页入口
 
-网页入口使用现有 Agent 与 Text2SQL 流程，命令行 `python main.py` 仍可独立使用。网页会话存储在独立的 `web_checkpoints.sqlite`，不会读取旧 CLI 会话；业务数据仍从原有只读 SQLite 文件查询。首次运行前完成上文的模型配置和 Chroma 索引准备。
+网页入口使用现有 Agent 与 Text2SQL 流程，命令行 `python main.py` 仍可独立使用。网页会话存储在独立的 `web_checkpoints.sqlite`，不会读取旧 CLI 会话；业务数据按 `database` 配置从 SQLite 或 PostgreSQL 查询。首次运行前完成上文的模型配置和 Chroma 索引准备。
 
 安装 Python 和前端依赖（在本项目目录内）：
 

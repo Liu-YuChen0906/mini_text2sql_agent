@@ -4,8 +4,8 @@
 
 - `mini.cli.main` 与 `mini.web.service` 都创建 `mini.agents.main_graph`，因此 CLI 和网页复用同一套 Agent 流程。
 - `mini.agents.main_graph` 只在数据问题时懒加载 `mini.agents.text2sql_graph`；普通交流无需打开 Chroma 索引。
-- `mini.agents.text2sql_graph` 调用 `mini.query` 中的提取、选表、SQL 生成、只读执行和评分函数。
-- `mini.runtime.resources` 创建聊天模型、Catalog 与三个 Chroma 集合；`mini.runtime.query_history` 保存成功查询结果。
+- `mini.agents.text2sql_graph` 调用 `mini.query` 中的提取、选表、SQL 生成、数据库适配器和评分函数。业务数据库通过 `DatabaseAdapter` 接口接入；内置 SQLite 和 PostgreSQL 实现。
+- `mini.runtime.resources` 创建聊天模型、Catalog、三个 Chroma 集合和按配置选择的业务数据库适配器；`mini.runtime.query_history` 保存成功查询结果。
 - `mini.web.api` 只负责 HTTP 与静态文件，`mini.web.service` 负责幂等请求、会话状态、检查点恢复和页面消息。
 
 ## 状态与数据

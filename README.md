@@ -18,6 +18,22 @@ requirements/   Python 依赖分组
 
 根目录的 `main.py`、`web_api.py`、`demo_output.py` 保留原启动命令。`config.yaml.example`、`catalog_data/` 和 `data/` 是部署配置与样例数据；运行时的检查点和 Chroma 索引不提交到 Git。
 
+## 业务数据库
+
+默认查询 `data/tracking_orders.sqlite`。`config.yaml` 的 `database` 配置可选择业务数据源：
+
+```yaml
+database:
+  type: sqlite
+  path: data/tracking_orders.sqlite
+```
+
+PostgreSQL 使用相同的订单表时可改为 `type: postgres`，并在启动前设置 `MINI_DATABASE_URL`，例如 `postgresql://只读用户:密码@主机:5432/数据库名`。连接串不要提交到 Git。PostgreSQL 表建议使用未加引号的小写名称；适配器会与 Catalog 中的 `Customers` 等名称匹配。账号应仅有目标表的 `SELECT` 权限。程序还会在每次查询使用只读事务。
+
+添加其他数据库时，实现 `DatabaseAdapter` 的表字段读取和只读查询接口，再用 `register_adapter` 注册类型；若该数据库需要专属 SQL 示例，可在 `catalog_data/` 增加 `sql_example_<dialect>.yaml`。同一次运行只选择一个业务数据源。会话检查点与网页状态使用的 SQLite 不受此配置影响。
+
+CI 使用临时 PostgreSQL 服务运行集成测试；本地未配置 `TEST_POSTGRES_DSN` 时该测试会跳过。
+
 ## 启动与验证
 
 在项目根目录运行：

@@ -36,7 +36,7 @@ def _table_sections(link: LinkResult, catalog: FileCatalog) -> list[str]:
     return sections
 
 
-def _related_sql_examples(question: str, selected_tables: set[str], catalog: FileCatalog, store: Any) -> list[str]:
+def _related_sql_examples(question: str, selected_tables: set[str], catalog: FileCatalog, store: Any, dialect: str) -> list[str]:
     """用途：检索并筛选可用于当前选表结果的 SQL 问答示例。
 
     参数输入：
@@ -48,7 +48,7 @@ def _related_sql_examples(question: str, selected_tables: set[str], catalog: Fil
         list[str]：符合原有表标签和 FROM/JOIN 正则筛选规则的 Q/A 文本；
             检索失败时打印提示并返回空列表。保留 k=5、fetch_k=20 参数。
     """
-    examples = {sample_question: (sql, tables) for sample_question, sql, tables in catalog.get_sql_examples()}
+    examples = {sample_question: (sql, tables) for sample_question, sql, tables in catalog.get_sql_examples(dialect)}
     related = []
     try:
         found = store.max_marginal_relevance_search(question, k=5, fetch_k=20)
@@ -65,7 +65,7 @@ def _related_sql_examples(question: str, selected_tables: set[str], catalog: Fil
     return related
 
 
-def build_sql_context(link: LinkResult, catalog: FileCatalog, store: Any) -> str:
+def build_sql_context(link: LinkResult, catalog: FileCatalog, store: Any, dialect: str = "sqlite") -> str:
     """用途：将选中表信息和相关 SQL 示例合并为生成 SQL 的上下文。
 
     参数输入：
@@ -78,5 +78,5 @@ def build_sql_context(link: LinkResult, catalog: FileCatalog, store: Any) -> str
     """
     sections = _table_sections(link, catalog)
     selected_tables = {item.table for item in link.selected}
-    related = _related_sql_examples(link.rewrite_question, selected_tables, catalog, store)
+    related = _related_sql_examples(link.rewrite_question, selected_tables, catalog, store, dialect)
     return "\n\n".join(sections) + "\n\nRelevant SQL examples:\n" + "\n\n".join(related)

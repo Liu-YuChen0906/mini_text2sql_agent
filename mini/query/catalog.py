@@ -44,6 +44,7 @@ class FileCatalog:
         self.table_info = self._read_yaml("table_info.yaml")
         self.selection_examples = self._read_csv("table_selection_example.csv")
         self.sql_examples = self._read_yaml("sql_example.yaml")
+        self.dialect_sql_examples: dict[str, dict[str, Any]] = {}
 
     def _read_csv(self, filename: str) -> list[dict[str, str]]:
         """用途：读取一份 CSV 文件，并以表头作为字典键。
@@ -143,18 +144,27 @@ class FileCatalog:
             if row.get("question") and row.get("selected_tables")
         ]
 
-    def get_sql_examples(self) -> list[tuple[str, str, list[str]]]:
+    def get_sql_examples(self, dialect: str = "sqlite") -> list[tuple[str, str, list[str]]]:
         """用途：解析 YAML 中以 Q/A 格式保存的 SQL 示例。
 
-        参数输入：无；读取实例中的 sql_examples YAML 映射。
+        参数输入：dialect 是 SQL 方言；SQLite 用默认文件，其他方言读取
+            sql_example_<dialect>.yaml；缺少专属文件时不提供 SQL 示例。
         输出：
             list[tuple[str, str, list[str]]]：每项为 (示例问题, SQL 文本,
                 YAML 所属表名列表)。一个文本块可以有多组以 Q:、A: 开头的问答；
                 只有问题和答案都非空的组合才进入结果。第三项只记录 YAML 的表标签，
                 不自动分析 SQL 中的所有 JOIN 表。
         """
+        if dialect == "sqlite":
+            source = self.sql_examples
+        else:
+            if dialect not in self.dialect_sql_examples:
+                self.dialect_sql_examples[dialect] = self._read_yaml(f"sql_example_{dialect}.yaml") if (
+                    self.data_path / f"sql_example_{dialect}.yaml"
+                ).is_file() else {}
+            source = self.dialect_sql_examples[dialect]
         examples = []
-        for database, tables in self.sql_examples.items():
+        for database, tables in source.items():
             for table, block in tables.items():
                 question = answer = ""
                 current = None
@@ -172,3 +182,15 @@ class FileCatalog:
                 if question and answer:
                     examples.append((question.strip(), answer.strip(), [f"{database}.{table}".strip(".")]))
         return examples
+
+    def get_sql_example_questions(self) -> list[str]:
+        """列出所有方言示例问题，供共享的向量检索索引使用。"""
+        questions = [question for question, _, _ in self.get_sql_examples()]
+        seen = set(questions)
+        for path in sorted(self.data_path.glob("sql_example_*.yaml")):
+            dialect = path.stem.removeprefix("sql_example_")
+            for question, _, _ in self.get_sql_examples(dialect):
+                if question not in seen:
+                    questions.append(question)
+                    seen.add(question)
+        return questions

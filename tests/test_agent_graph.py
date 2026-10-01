@@ -47,7 +47,7 @@ def _parent(tmp_path, monkeypatch, routing, *, checkpoint_name="checkpoints.sqli
     connection = sqlite3.connect(path, check_same_thread=False)
     resources = SimpleNamespace(
         catalog=object(), indexes=SimpleNamespace(text2sql=object()),
-        llm=routing, database_path=Path("unused"),
+        llm=routing, adapter=calls["adapter"],
     )
     history = QueryHistory(path)
     graph = build_agent_graph(routing, SqliteSaver(connection), history, lambda: resources)

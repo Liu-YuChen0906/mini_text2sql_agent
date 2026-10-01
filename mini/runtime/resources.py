@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 import chromadb
 import yaml
 from mini.query.catalog import FileCatalog
+from mini.query.database import DatabaseAdapter, create_adapter
 from chromadb.config import Settings
 from langchain_chroma import Chroma
 from langchain_deepseek import ChatDeepSeek
@@ -37,14 +38,14 @@ class IndexStores:
 class RuntimeResources:
     """类用途：保存一次查询流程共同使用的已初始化依赖。
 
-    支持功能：向主流程提供文件目录、三个向量集合、聊天模型和数据库路径；
+    支持功能：向主流程提供文件目录、三个向量集合、聊天模型和数据库适配器；
     本类只承载资源，不执行检索、生成 SQL 或数据库查询。
     """
 
     catalog: FileCatalog
     indexes: IndexStores
     llm: ChatDeepSeek
-    database_path: Path
+    adapter: DatabaseAdapter
 
 
 @lru_cache(maxsize=1)
@@ -127,7 +128,7 @@ def initialize_chroma(
             [question for question, _ in catalog.get_table_selection_examples()] or [""],
             None,
         ),
-        "text2sql": ([question for question, _, _ in catalog.get_sql_examples()], None),
+        "text2sql": (catalog.get_sql_example_questions(), None),
     }
     stores = {}
     for name, (texts, metadatas) in sources.items():
@@ -248,11 +249,11 @@ def load_resources(
     config_path: str | Path = CONFIG_PATH, database_path: str | Path = DATABASE_PATH,
     *, llm: ChatDeepSeek | None = None,
 ) -> RuntimeResources:
-    """用途：一次性组装主流程需要的目录、索引、模型与数据库路径。
+    """用途：一次性组装主流程需要的目录、索引、模型与数据库适配器。
 
     参数输入：
         config_path（str | Path）：Mini 的 YAML 配置路径；默认使用项目配置。
-        database_path（str | Path）：SQLite 文件路径；默认使用示例数据库。
+        database_path（str | Path）：旧调用方可覆盖默认 SQLite 文件路径。
         llm（ChatDeepSeek | None）：主 Agent 已创建的模型；传入时直接复用。
     输出：
         RuntimeResources：四种依赖的带名称容器；模型只创建一次，由后续
@@ -262,4 +263,11 @@ def load_resources(
     catalog = load_catalog(config, config_path)
     indexes = load_chroma(config, catalog, config_path)
     llm = llm or create_llm(config_path, config=config)
-    return RuntimeResources(catalog, indexes, llm, Path(database_path))
+    database_config = config.get("database") or {}
+    if isinstance(database_config, dict) and database_config.get("type", "sqlite") == "sqlite" and "path" in database_config:
+        path = Path(database_config["path"])
+        if not path.is_absolute():
+            path = Path(config_path).parent / path
+        config = {**config, "database": {**database_config, "path": path}}
+    adapter = create_adapter(config, Path(database_path))
+    return RuntimeResources(catalog, indexes, llm, adapter)

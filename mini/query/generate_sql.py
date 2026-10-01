@@ -1,41 +1,7 @@
-import sqlite3
-from pathlib import Path
 from typing import Any
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-
-DIALECT = "SQLite"
-
-
-def load_schema(database_path: str | Path) -> str:
-    """用途：读取 SQLite 中所有业务表的建表语句。
-
-    参数输入：
-        database_path（str | Path）：现有 SQLite 数据库文件路径，以只读 URI 打开。
-    输出：
-        str：从 sqlite_master 取得的各业务表 CREATE TABLE 语句，按表名排序并
-            用空行连接；过滤 sqlite_ 开头的系统表。没有业务表时返回空字符串。
-    说明：这是早期直接提供完整建表语句的辅助函数；当前 main.py 改用
-        schema_linking.sql_context 生成更有针对性的结构上下文。
-    """
-    query = """
-    SELECT name, sql
-    FROM sqlite_master
-    WHERE type = 'table'
-      AND name NOT LIKE 'sqlite_%'
-    ORDER BY name;
-    """
-
-    db_path = Path(database_path).resolve()
-    with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as connection:
-        rows = connection.execute(query).fetchall()
-    create_statements = []
-    for _name, create_sql in rows:
-        if create_sql:
-            create_statements.append(create_sql)
-    return "\n\n".join(create_statements)
-
 
 def build_prompt() -> ChatPromptTemplate:
     """用途：构造要求模型只生成一条只读查询的聊天提示模板。
@@ -52,6 +18,7 @@ def build_prompt() -> ChatPromptTemplate:
                 "system",
                 "You are a professional SQL engineer. Generate exactly one read-only "
                 "{dialect} SELECT query. Only use tables and columns in the schema. "
+                "Use unquoted table and column names unless the schema explicitly requires quotes. "
                 "Return SQL only, without explanations.\n\nSchema:\n{schema}",
             ),
             ("human", "{question}"),
@@ -59,7 +26,7 @@ def build_prompt() -> ChatPromptTemplate:
     )
 
 
-def generate_sql(question: str, schema: str, llm: Any) -> str:
+def generate_sql(question: str, schema: str, llm: Any, dialect: str = "sqlite") -> str:
     """用途：把问题和整理好的结构信息交给模型，生成 SQL 文本。
 
     参数输入：
@@ -73,25 +40,25 @@ def generate_sql(question: str, schema: str, llm: Any) -> str:
             和 ``` 标记并去掉首尾空白。此函数不校验 SQL，也不执行 SQL。
     """
     chain = build_prompt() | llm | StrOutputParser()
-    content = chain.invoke({"dialect": DIALECT, "schema": schema, "question": question})
+    content = chain.invoke({"dialect": dialect, "schema": schema, "question": question})
     return content.replace("```sql", "").replace("```", "").strip()
 
 
-def regenerate_sql(question: str, schema: str, previous_sql: str, error: str, llm: Any) -> str:
-    """用途：把上次 SQL 和 SQLite 错误反馈给模型，要求按原问题重新生成查询。
+def regenerate_sql(question: str, schema: str, previous_sql: str, error: str, llm: Any, dialect: str = "sqlite") -> str:
+    """用途：把上次 SQL 和数据库错误反馈给模型，要求按原问题重新生成查询。
 
     参数输入：question 为改写后的问题，schema 为已选表的结构上下文，
         previous_sql 为失败的 SQL，error 为执行错误，llm 为复用的聊天模型。
     输出：str，经过 generate_sql 清理代码围栏后的新 SQL；此处不执行或校验。
     """
     feedback = (
-        f"{question}\n\nThe previous SQLite query failed. Correct it and return SQL only."
-        f"\nPrevious SQL: {previous_sql}\nSQLite error: {error}"
+        f"{question}\n\nThe previous {dialect} query failed. Correct it and return SQL only."
+        f"\nPrevious SQL: {previous_sql}\n{dialect} error: {error}"
     )
-    return generate_sql(feedback, schema, llm)
+    return generate_sql(feedback, schema, llm, dialect)
 
 
-def revise_sql(question: str, schema: str, previous_sql: str, human_feedback: str, llm: Any) -> str:
+def revise_sql(question: str, schema: str, previous_sql: str, human_feedback: str, llm: Any, dialect: str = "sqlite") -> str:
     """用途：根据人工自然语言反馈重新生成 SQL，不直接使用用户提供的 SQL。
 
     参数输入：question 是改写问题，schema 是当前表结构上下文，previous_sql
@@ -104,4 +71,4 @@ def revise_sql(question: str, schema: str, previous_sql: str, human_feedback: st
         "Generate a new SQL query that addresses the feedback. Return SQL only."
         f"\nPrevious SQL: {previous_sql}\nHuman feedback: {human_feedback}"
     )
-    return generate_sql(revision_request, schema, llm)
+    return generate_sql(revision_request, schema, llm, dialect)

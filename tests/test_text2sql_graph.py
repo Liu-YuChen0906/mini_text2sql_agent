@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from mini.agents import text2sql_graph
+from mini.query.database import ExecutionOutcome
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -30,7 +31,7 @@ def _error(message):
     return {"status": "error", "columns": [], "rows": [], "truncated": False, "error": message}
 
 
-def _make_graph(tmp_path, monkeypatch, *, extracts=None, sqls=None, results=None, scores=None):
+def _make_graph(tmp_path, monkeypatch, *, extracts=None, sqls=None, results=None, scores=None, dialect="sqlite"):
     """用途：用预设响应替换外部依赖，构建可离线测试的状态图。
 
     参数输入：tmp_path 放检查点；monkeypatch 替换模型和数据库调用；
@@ -41,7 +42,7 @@ def _make_graph(tmp_path, monkeypatch, *, extracts=None, sqls=None, results=None
     sqls = list(sqls or ["SELECT 1 AS id"])
     results = list(results or [_success()])
     scores = list(scores or [QualityScore(0.9, ["matches intent"])])
-    calls = {"extract": [], "link": [], "context": [], "generated": [], "revised": [], "executed": []}
+    calls = {"extract": [], "link": [], "context": [], "generated": [], "revised": [], "executed": [], "dialects": []}
 
     def extract(llm, question):
         """用途：模拟问题提取并记录输入。
@@ -69,31 +70,35 @@ def _make_graph(tmp_path, monkeypatch, *, extracts=None, sqls=None, results=None
             calls["link"].append(info)
             return LinkResult(info.rewrite_question, [SelectedTable("Orders", ["order_id"])], {"Orders": {"order_id"}})
 
-    def generate(question, schema, llm):
+    def generate(question, schema, llm, dialect="sqlite"):
         """用途：模拟 SQL 生成并记录问题。
 
         参数输入：question 为问题，schema 和 llm 为占位依赖；输出：下一条预设 SQL。
         """
         calls["generated"].append(question)
+        calls["dialects"].append(dialect)
         return sqls.pop(0)
 
-    def context(link, catalog, store):
+    def context(link, catalog, store, dialect="sqlite"):
         """记录 SQL 上下文是否按新的选表结果重建。"""
         calls["context"].append(link)
         return "Table: Orders"
 
-    def revise(question, schema, old, feedback, llm):
+    def revise(question, schema, old, feedback, llm, dialect="sqlite"):
         """记录人工反馈，并返回下一条模拟模型生成的 SQL。"""
         calls["revised"].append((question, schema, old, feedback))
         return generate(question, schema, llm)
 
-    def execute(sql, path):
+    def execute(sql, row_limit=100, timeout_seconds=2.0):
         """用途：模拟 SQL 执行并记录被执行的语句。
 
         参数输入：sql 为查询，path 为占位数据库路径；输出：下一条预设结果。
         """
         calls["executed"].append(sql)
-        return results.pop(0)
+        result = results.pop(0)
+        return ExecutionOutcome(result, result["status"] == "error" and any(
+            phrase in (result["error"] or "") for phrase in ("no such", "syntax error")
+        ))
 
     def score(*args):
         """用途：模拟质量评分或评分异常。
@@ -109,11 +114,15 @@ def _make_graph(tmp_path, monkeypatch, *, extracts=None, sqls=None, results=None
     monkeypatch.setattr(text2sql_graph, "SchemaLinker", FakeLinker)
     monkeypatch.setattr(text2sql_graph, "build_sql_context", context)
     monkeypatch.setattr(text2sql_graph, "generate_sql", generate)
-    monkeypatch.setattr(text2sql_graph, "regenerate_sql", lambda question, schema, old, error, llm: generate(question, schema, llm))
+    monkeypatch.setattr(text2sql_graph, "regenerate_sql", lambda question, schema, old, error, llm, dialect: generate(question, schema, llm, dialect))
     monkeypatch.setattr(text2sql_graph, "revise_sql", revise)
-    monkeypatch.setattr(text2sql_graph, "execute_readonly_sql", execute)
     monkeypatch.setattr(text2sql_graph, "score_sql", score)
-    resources = SimpleNamespace(catalog=object(), indexes=SimpleNamespace(text2sql=object()), llm=object(), database_path=Path("unused"))
+    adapter = SimpleNamespace(dialect=dialect, execute_readonly=execute)
+    calls["adapter"] = adapter
+    resources = SimpleNamespace(
+        catalog=object(), indexes=SimpleNamespace(text2sql=object()), llm=object(),
+        adapter=adapter,
+    )
     connection = sqlite3.connect(tmp_path / "checkpoints.sqlite", check_same_thread=False)
     return text2sql_graph.build_text2sql_graph(resources, SqliteSaver(connection)), connection, calls
 
@@ -146,6 +155,17 @@ def test_normal_flow_extracts_only_once(tmp_path, monkeypatch):
         assert state["sql"] == "SELECT 1 AS id"
         assert len(calls["extract"]) == len(calls["link"]) == 1
         assert "successful_turns" not in state and "last_successful_question" not in state
+    finally:
+        connection.close()
+
+
+def test_graph_uses_adapter_dialect_without_database_specific_branch(tmp_path, monkeypatch):
+    """第三种方言沿同一条生成和执行路径流转。"""
+    graph, connection, calls = _make_graph(tmp_path, monkeypatch, dialect="third")
+    try:
+        assert _start(graph)["status"] == "success"
+        assert calls["dialects"] == ["third"]
+        assert calls["executed"] == ["SELECT 1 AS id"]
     finally:
         connection.close()
 

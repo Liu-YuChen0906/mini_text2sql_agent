@@ -23,7 +23,7 @@ def service_for(tmp_path, monkeypatch, responses, **child_options):
     routing = FakeRoutingLLM(responses)
     resources = SimpleNamespace(
         catalog=object(), indexes=SimpleNamespace(text2sql=object()),
-        llm=routing, database_path=Path("unused"),
+        llm=routing, adapter=calls["adapter"],
     )
     service = WebSessionService(tmp_path / "web.sqlite", llm=routing,
                                 query_resources_factory=lambda: resources)
