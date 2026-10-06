@@ -21,7 +21,7 @@
     A: SELECT o.order_id, c.customer_name, o.order_status, o.date_order_placed
     FROM Orders o
     JOIN Customers c ON o.customer_id = c.customer_id
-    WHERE o.order_status = 'pending'
+    WHERE o.order_status = 'Pending'
     ORDER BY o.date_order_placed
   Products: |
     Q: Search for products containing ''laptop'' in the name
@@ -31,13 +31,11 @@
     ORDER BY product_name
 
     Q: Count orders by product category (product_name is the category field)
-    A: SELECT CASE WHEN strpos(p.product_name, '-') > 0
-      THEN substr(p.product_name, 1, strpos(p.product_name, '-') - 1)
-      ELSE p.product_name END AS category,
+    A: SELECT p.product_name AS category,
       COUNT(DISTINCT oi.order_id) AS order_count
       FROM Order_Items oi
       JOIN Products p ON oi.product_id = p.product_id
-      GROUP BY category
+      GROUP BY p.product_name
       ORDER BY order_count DESC
   Shipment_Items: |
     Q: Show which order items are in shipment 456

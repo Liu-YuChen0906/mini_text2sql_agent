@@ -47,10 +47,17 @@ class PostgreSQLAdapter:
                     real.setdefault(table, set()).add(column)
                 return match_catalog_tables(real, catalog_tables)
 
+    def sample_context(self, tables: dict[str, set[str]]) -> str:
+        """为 SQL 生成提供实际枚举和时间范围。"""
+        from mini.query.database import sample_business_context
+        return sample_business_context(self, tables)
+
     def execute_readonly(self, sql: str, row_limit: int = 100, timeout_seconds: float = 2.0) -> ExecutionOutcome:
         """在只读事务内执行单条查询，使用服务端语句超时。"""
         rejected = reject_unsafe_sql(sql, self.dialect)
         if rejected:
+            if rejected == "SQL 语法无法识别。" and sql.lstrip().upper().startswith(("SELECT", "WITH")):
+                return ExecutionOutcome(empty_result("error", rejected), repairable=True)
             return ExecutionOutcome(empty_result("rejected", rejected))
         if row_limit <= 0:
             raise ValueError("row_limit 必须大于 0。")

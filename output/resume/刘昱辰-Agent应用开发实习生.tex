@@ -1,0 +1,86 @@
+% 编译方式：XeLaTeX。照片使用 Overleaf 已有 images/you.jpg；本地另保留旧简历照片。
+% 保留原模板的 datedsubsection 命令；无需外部 resume.cls 或字体文件。
+% 用途：目标简历，描述计划达到的能力，不是当前经历的事实证明，暂不用于投递。
+% 当前事实：Mini 已有主图/子图、检索选表、SQL 修复、人工审核、检查点、网页与离线测试。
+% Mini 目标项：多工具分析与图表、模型故障治理、SSE 事件流、可观测性和真实模型评测。
+% Python 全栈项目：尚未实现；以下按完成后的目标形态编写，不代表旧版已使用 Python。
+% Mini OpenChatBI 起始月份待核实；年龄、到岗时间、实习时长未确认，暂不填写。
+\documentclass[10pt,a4paper]{article}
+\usepackage[UTF8,fontset=fandol]{ctex}
+\usepackage[left=1.35cm,right=1.35cm,top=1.05cm,bottom=1.05cm]{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\pagestyle{empty}
+% 覆盖 ctex 默认的 1.3 倍行距，保持正文 10pt。
+\linespread{1.0}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlist[itemize]{leftmargin=1.35em,itemsep=1pt,topsep=2pt,parsep=0pt}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}[\titlerule]
+\titlespacing*{\section}{0pt}{6pt}{3pt}
+% 紧凑页眉：个人信息与照片并排，避免 center 环境的额外上下留白。
+\newcommand{\datedsubsection}[2]{\noindent #1\hfill{\small #2}\par\vspace{1pt}}
+\newcommand{\resumephoto}{%
+  \IfFileExists{images/you.jpg}{\includegraphics[width=2.05cm,height=2.05cm,keepaspectratio]{images/you.jpg}}{%
+    \IfFileExists{/Users/apple/Documents/求职/openchatbi/mini_openchatbi/output/resume/images/you.jpg}{\includegraphics[width=2.05cm,height=2.05cm,keepaspectratio]{/Users/apple/Documents/求职/openchatbi/mini_openchatbi/output/resume/images/you.jpg}}{\fbox{\parbox[c][1.9cm][c]{1.9cm}{\centering\small 照片}}}}}
+
+\begin{document}
+\pagenumbering{gobble}
+\fontsize{10}{12.5}\selectfont
+\noindent\begin{minipage}[c]{\dimexpr\textwidth-2.4cm\relax}
+  {\fontsize{23}{25}\selectfont\bfseries 刘昱辰}\par\vspace{4pt}
+  求职意向：Agent 应用开发实习生\quad 意向城市：北京\par\vspace{2pt}
+  手机：13137515702\quad 邮箱：\href{mailto:YuchenLiu0906@163.com}{YuchenLiu0906@163.com}
+\end{minipage}\hfill\begin{minipage}[c]{2.1cm}
+  \raggedleft\resumephoto
+\end{minipage}\par
+
+\section{教育背景}
+\datedsubsection{\textbf{北京工业大学（211）} \quad 软件工程 \quad 硕士}{2026 -- 2029}
+\datedsubsection{\textbf{福州大学（211）} \quad 信息安全 \quad 本科}{2022 -- 2026}
+
+\section{专业技能}
+\begin{itemize}
+  \item \textbf{Agent 工程：}熟悉 LangChain / LangGraph、Function Calling 与子图编排，掌握多轮记忆、检查点恢复、Human-in-the-loop、工具校验及有界重试。
+  \item \textbf{检索与评测：}掌握 Chroma、Schema Linking、Few-shot 与上下文构建，能够设计语义校验、失败分类及回归评测，定位检索、生成与执行问题。
+  \item \textbf{Python 后端：}熟悉 FastAPI、Pydantic、SQLAlchemy、PostgreSQL、Redis，掌握 RESTful API、认证授权、事务、异步任务、幂等控制与索引优化。
+  \item \textbf{全栈交付：}使用 React / Vue、TypeScript、Vite 开发业务界面及 SSE 交互，使用 pytest、Docker Compose、GitHub Actions 完成测试、部署与持续集成。
+\end{itemize}
+
+\section{项目经历}
+\datedsubsection{\textbf{Mini OpenChatBI：基于 Agent 的自然语言数据查询系统}}{2026 -- 至今}
+\textbf{项目技术：}Python、LangGraph、LangChain、Chroma、FastAPI、Vue 3、PostgreSQL、SSE\par
+\textbf{项目描述：}基于 OpenChatBI 开源项目改造对话式 BI Agent，贯通问题理解、SQL 查询、结果分析与可视化，支持多轮追问、人工审核及中断恢复。
+\begin{itemize}
+  \item \textbf{分层 Agent 与工具协作：}主 Agent 管理意图与会话，通过 Function Calling 调度 Text2SQL 子图、分析和图表工具；结构化工具输入输出，隔离模型参数与可信状态，以执行预算、条件边和终止条件约束流程。
+  \item \textbf{检索与上下文工程：}融合字段向量、目录文本与 MMR 示例检索实现 Schema Linking；以 SQL AST 筛选示例，注入指标口径、连接粒度和真实枚举，校验表字段并对缺失指标拒答。
+  \item \textbf{SQL 可靠性闭环：}构建“生成—只读执行—六项业务检查—修复”闭环，执行错误最多重试 3 次、语义错误修正 2 次；限制查询时间与行数，低置信度转人工审核，支持自然语言修改及重新选表。
+  \item \textbf{长期会话与过程交互：}分离消息、检查点和成功查询记录，按需召回历史 SQL 与已返回结果；通过 SSE 展示节点、工具及结果事件，结合请求幂等和消息合并实现可恢复交互。
+  \item \textbf{故障治理与评测：}封装模型超时、限流退避与错误分类，记录耗时、Token 和修复轨迹；评测覆盖多表关联、零记录、歧义与不可计算指标，分别验证路由、执行及语义正确性。
+\end{itemize}
+
+% 日期暂写“目标项目”，完成后填写 Python 版本的实际开发日期，不沿用旧产品时间。
+\datedsubsection{\textbf{学习目标与专注管理平台}\quad Python 全栈项目}{目标项目}
+\textbf{项目技术：}FastAPI、SQLAlchemy、Alembic、PostgreSQL、Redis、Celery、React、Docker\par
+\textbf{项目描述：}面向备考场景开发多用户学习平台，支持目标拆解、专注计时、统计与 AI 复盘，独立完成业务建模、前后端开发及容器化交付。
+\begin{itemize}
+  \item \textbf{后端架构与数据一致性：}以 FastAPI 构建 API、业务与数据访问分层，通过 Pydantic、SQLAlchemy、Alembic 实现校验、事务及迁移；以约束和幂等键处理三层目标关联、重复计时及非法状态转换。
+  \item \textbf{认证授权与查询优化：}实现 JWT 登录、刷新令牌轮换、密码哈希与资源归属校验，结合限流保护用户数据；按用户与时间范围建立复合索引，通过 EXPLAIN ANALYZE 优化统计与分页。
+  \item \textbf{异步任务与 AI 服务：}使用 Celery + Redis 执行复盘和报告任务，持久化状态并支持查询；配置超时、有限重试与去重，失败时保留原始记录，通过服务端密钥和用户配额控制 AI 调用。
+  \item \textbf{前端与工程交付：}以 React + TypeScript 实现目标树、计时与统计，处理刷新恢复和乐观更新回滚；pytest 覆盖越权、幂等及事务边界，Docker Compose 与 GitHub Actions 支持部署和自动化检查。
+\end{itemize}
+
+\section{实习经历}
+\datedsubsection{\textbf{北京快手科技有限公司}\quad 商业化产品运营}{2024.06 -- 2024.09}
+\begin{itemize}
+  \item 基于 Hive 与 SQL 构建 10+ 自动化 BI 看板，覆盖 CPM、ROI、消耗与 GMV；将运营响应从 48 小时缩短至实时监测，日均支撑 50+ 需求。
+\end{itemize}
+
+\section{个人优势}
+\begin{itemize}
+  \item 兼具产品与工程视角，能推进需求、架构、Agent 开发及全栈交付；善用 Codex / Claude Code，结合源码审查、测试和真实场景验证实现质量。
+\end{itemize}
+
+\end{document}

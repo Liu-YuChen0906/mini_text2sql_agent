@@ -52,3 +52,5 @@ python -m pytest -q -o addopts='' tests
 ```
 
 架构与导入规则见[代码架构](docs/architecture.md)。上游许可证见 [UPSTREAM_LICENSE](UPSTREAM_LICENSE)。
+
+交互与 SQL 正确性排查、原项目对照及验证边界见 [改进说明](docs/sql-quality-improvements.md)。

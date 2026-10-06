@@ -101,3 +101,34 @@ def match_catalog_tables(real: dict[str, set[str]], catalog_tables: list[str]) -
         elif len(names) > 1:
             raise ValueError(f"数据库中有多个仅大小写不同的同名表：{table}")
     return result
+
+
+def sample_business_context(adapter: DatabaseAdapter, tables: dict[str, set[str]]) -> str:
+    """仅抽取状态/州枚举和日期范围，不读取客户姓名或自由文本；查询失败时保留提示。"""
+    import json
+
+    sections = ["实际数据概况（状态值优先于静态字段说明；样本可能不完整）："]
+    for table, columns in tables.items():
+        # Keep identifiers separate from literals; PostgreSQL follows unquoted lowercase catalog names.
+        name = table.lower() if adapter.dialect == "postgres" else table
+        table_sql = ".".join('"' + part.replace('"', '""') + '"' for part in name.split("."))
+        for column in sorted(columns):
+            column_sql = '"' + column.replace('"', '""') + '"'
+            if column.endswith("_status") or column == "state":
+                sql = f"SELECT DISTINCT {column_sql} FROM {table_sql} ORDER BY {column_sql} LIMIT 21"
+                label = "实际取值（最多20个）"
+            elif column.endswith("_date") or column == "date_order_placed":
+                sql = f"SELECT MIN({column_sql}), MAX({column_sql}) FROM {table_sql}"
+                label = "最早/最晚日期"
+            else:
+                continue
+            try:
+                result = adapter.execute_readonly(sql, row_limit=21).result
+                if result["status"] != "success":
+                    raise ValueError(result["status"])
+                values = result["rows"][:20]
+                sections.append(f"{table}.{column} {label}: {json.dumps(values, ensure_ascii=False)}"
+                                + ("；取值未列全" if len(result["rows"]) > 20 else ""))
+            except Exception:
+                sections.append(f"{table}.{column} 数据概况不可用；不要猜测其取值或日期范围。")
+    return "\n".join(sections)

@@ -40,6 +40,9 @@ class SQLState(TypedDict, total=False):
     errors: list[dict[str, str]]
     retry_count: int
     human_feedback: str
+    sql_feedback_history: list[str]
+    semantic_retry_count: int
+    failed_checks: list[str]
     confidence: float | None
     confidence_reasons: list[str]
     human_decision: str
@@ -67,6 +70,9 @@ def new_text2sql_turn(question: str, *, context: str = "") -> SQLState:
         "errors": [],
         "retry_count": 0,
         "human_feedback": "",
+        "sql_feedback_history": [],
+        "semantic_retry_count": 0,
+        "failed_checks": [],
         "confidence": None,
         "confidence_reasons": [],
         "human_decision": "",
@@ -88,6 +94,15 @@ def _link_result(state: SQLState) -> LinkResult:
     )
 
 
+
+def _effective_question(state: SQLState) -> str:
+    """生成、修复和评分使用同一口径，最近用户修正优先。"""
+    question = state["rewrite_question"]
+    feedback = state.get("sql_feedback_history", [])
+    if feedback:
+        question += "\n用户历次修正（后续意见优先；保留未被替换的条件）：\n" + "\n".join(feedback)
+    return question
+
 def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     """用途：用已初始化资源构建并编译可暂停、可恢复的 Text2SQL 状态图。
 
@@ -108,8 +123,9 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         question = state["question"]
         for answer in state.get("clarification_history", []):
             question += f"\n用户补充：{answer}"
-        for feedback in state.get("schema_feedback_history", []):
-            question += f"\n用户对选表的修正：{feedback}"
+        feedback_history = state.get("sql_feedback_history") or state.get("schema_feedback_history", [])
+        for feedback in feedback_history:
+            question += f"\n用户修正（后续意见优先）：{feedback}"
         if state.get("context"):
             question = f"已完成查询历史：\n{state['context']}\n当前用户问题：{question}"
         try:
@@ -181,7 +197,11 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         输出：sql_context 文本及 context_ready 状态；失败时返回错误状态。
         """
         try:
-            context = build_sql_context(_link_result(state), resources.catalog, resources.indexes.text2sql, resources.adapter.dialect)
+            linked = _link_result(state)
+            context = build_sql_context(linked, resources.catalog, resources.indexes.text2sql, resources.adapter.dialect)
+            sampler = getattr(resources.adapter, "sample_context", None)
+            if sampler:
+                context += "\n\n" + sampler({item.table: linked.real[item.table] for item in linked.selected})
         except Exception as exc:
             return {"status": "error", "error": f"SQL 上下文构造失败：{exc}"}
         return {"status": "context_ready", "sql_context": context}
@@ -193,11 +213,11 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         输出：非空 SQL 与 sql_ready 状态；模型异常或空结果转为错误状态。
         """
         try:
-            sql = generate_sql(state["rewrite_question"], state["sql_context"], resources.llm, resources.adapter.dialect)
+            sql = generate_sql(_effective_question(state), state["sql_context"], resources.llm, resources.adapter.dialect)
         except Exception as exc:
             return {"status": "error", "error": f"SQL 生成失败：{exc}"}
         if not sql or sql.lower() == "null":
-            return {"status": "error", "error": "模型没有生成可执行 SQL。"}
+            return {"status": "error", "error": "现有字段或业务定义不足，无法可靠生成 SQL。请补充指标口径或目录信息。"}
         return {"status": "sql_ready", "sql": sql}
 
     def regenerate_node(state: SQLState) -> dict[str, Any]:
@@ -209,7 +229,7 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         previous = state["errors"][-1]
         try:
             sql = regenerate_sql(
-                state["rewrite_question"], state["sql_context"], previous["sql"], previous["error"], resources.llm,
+                _effective_question(state), state["sql_context"], previous["sql"], previous["error"], resources.llm,
                 resources.adapter.dialect,
             )
         except Exception as exc:
@@ -226,7 +246,7 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             sql = revise_sql(
-                state["rewrite_question"], state["sql_context"], state["sql"], state["human_feedback"], resources.llm,
+                state["rewrite_question"], state["sql_context"], state["sql"], "\n".join(state.get("sql_feedback_history", []) or [state["human_feedback"]]), resources.llm,
                 resources.adapter.dialect,
             )
         except Exception as exc:
@@ -281,11 +301,11 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             evaluated = score_sql(
-                resources.llm, state["rewrite_question"], state["sql"], state["sql_context"], state["result"]
+                resources.llm, _effective_question(state), state["sql"], state["sql_context"], state["result"]
             )
-            return {"confidence": evaluated.score, "confidence_reasons": evaluated.reasons}
+            return {"confidence": evaluated.score, "confidence_reasons": evaluated.reasons, "failed_checks": list(evaluated.failed_checks)}
         except Exception as exc:
-            return {"confidence": None, "confidence_reasons": [f"评分不可用：{exc}"]}
+            return {"confidence": None, "confidence_reasons": [f"评分不可用：{exc}"], "failed_checks": []}
 
     def route_score(state: SQLState) -> str:
         """用途：按评分阈值决定直接结束或进入人工审核。
@@ -293,8 +313,24 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         参数输入：state 的 confidence 为 0 到 1 的分数或 None。
         输出：str，分数至少 0.7 时为 end，否则为 review。
         """
+        if state.get("failed_checks") and state.get("semantic_retry_count", 0) < 2:
+            return "semantic_repair"
         score = state.get("confidence")
         return "finalize" if score is not None and score >= CONFIDENCE_THRESHOLD else "review"
+
+    def semantic_repair_node(state: SQLState) -> dict[str, Any]:
+        """将逐项审核发现的业务错误反馈给生成模型，最多自动修正两次。"""
+        feedback = "业务审核未通过：" + ", ".join(state.get("failed_checks", []))
+        feedback += "\n" + "\n".join(state.get("confidence_reasons", []))
+        feedback += "\n历次用户修正：" + "\n".join(state.get("sql_feedback_history", []))
+        try:
+            sql = revise_sql(_effective_question(state), state["sql_context"], state["sql"], feedback,
+                             resources.llm, resources.adapter.dialect)
+        except Exception as exc:
+            return {"status": "semantic_repair_failed", "error": f"业务逻辑修正失败：{exc}"}
+        if not sql or sql.lower() == "null":
+            return {"status": "semantic_repair_failed", "error": "模型无法按审核意见修正；请人工确认。"}
+        return {"sql": sql, "status": "sql_ready", "semantic_retry_count": state.get("semantic_retry_count", 0) + 1}
 
     def finalize_node(state: SQLState) -> dict[str, Any]:
         """用途：标记本轮查询完成；长期成功历史由主 Agent 统一保存。"""
@@ -331,6 +367,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
             update: dict[str, Any] = {
                 "human_decision": decision,
                 "human_feedback": human_feedback.strip(),
+                "sql_feedback_history": [*state.get("sql_feedback_history", []), human_feedback.strip()],
+                "semantic_retry_count": 0,
                 "status": "needs_sql_revision" if decision == "edit_sql" else "needs_relink",
             }
             if decision == "edit_schema":
@@ -372,7 +410,7 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     for name, node in (
         ("extract", extract_node), ("clarify", clarify_node), ("link", link_node),
         ("context", context_node), ("generate", generate_node), ("regenerate", regenerate_node),
-        ("revise", revise_node),
+        ("revise", revise_node), ("semantic_repair", semantic_repair_node),
         ("execute", execute_node), ("score", score_node), ("review", review_node),
         ("finalize", finalize_node),
     ):
@@ -386,7 +424,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
     graph.add_conditional_edges("regenerate", lambda s: "execute" if s.get("status") == "sql_ready" else "end", {"execute": "execute", "end": END})
     graph.add_conditional_edges("revise", lambda s: "execute" if s.get("status") == "sql_ready" else "end", {"execute": "execute", "end": END})
     graph.add_conditional_edges("execute", route_execution, {"score": "score", "regenerate": "regenerate", "end": END})
-    graph.add_conditional_edges("score", route_score, {"review": "review", "finalize": "finalize"})
+    graph.add_conditional_edges("score", route_score, {"review": "review", "finalize": "finalize", "semantic_repair": "semantic_repair"})
+    graph.add_conditional_edges("semantic_repair", lambda s: "execute" if s.get("status") == "sql_ready" else "review", {"execute": "execute", "review": "review"})
     graph.add_conditional_edges("review", route_review, {"revise": "revise", "extract": "extract", "regenerate": "regenerate", "finalize": "finalize", "end": END})
     graph.add_edge("finalize", END)
     return graph.compile(checkpointer=checkpointer)

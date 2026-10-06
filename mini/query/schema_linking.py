@@ -211,7 +211,7 @@ def _candidate_tables(
         columns = [
             column for column in catalog.get_column_list(table) if column["column_name"] in real.get(table, set())
         ]
-        if columns and (not matched_columns or any(column["column_name"] in matched_columns for column in columns)):
+        if columns and (len(catalog.get_table_list()) <= 12 or not matched_columns or any(column["column_name"] in matched_columns for column in columns)):
             candidates[table] = columns
     return candidates
 
@@ -299,10 +299,14 @@ def _selection_prompt(catalog: FileCatalog, candidates: dict[str, list[dict[str,
             f"Table: {table}\nDescription: {metadata.get('description', '')}\n"
             f"Selection rule: {metadata.get('selection_rule', '')}\nColumns: {fields}"
         )
+    knowledge_path = catalog.data_path / "business_knowledge.md"
+    knowledge = knowledge_path.read_text(encoding="utf-8") if knowledge_path.is_file() else ""
     return (
+        "业务知识与口径：\n" + knowledge + "\n\n"
         "根据问题从候选表选择所需的表和字段。只能使用列出的表和字段。"
         '返回 JSON：{"tables":[{"table":"表名","columns":["字段名"]}]}。'
-        "每张表至少列出一个相关字段；需要连接时包含连接字段。\n\n"
+        "每张表至少列出一个相关字段；包含连接字段及中间桥接表。"
+        "检查不存在、全部满足、没有订单等问题所需的子查询表；不要为展示而引入不必要连接。\n\n"
         + "\n\n".join(table_text)
         + "\n\nSimilar examples:\n"
         + "\n\n".join(examples)

@@ -1,29 +1,67 @@
 ? ''
 : Customers:
-    description: 'Contains customer information including unique ID, name, state, and additional details'
-    selection_rule: 'Select when queries involve customer information, customer names, customer location/state, or need to join orders with customer data'
-    sql_rule: 'Use customer_id as primary key for joins. Always include customer_name when displaying customer information. Use state for US state-level filtering or grouping'
+    description: Contains customer information including unique ID, name, state, and
+      additional details
+    selection_rule: Select when queries involve customer information, customer names,
+      customer location/state, or need to join orders with customer data
+    sql_rule: Use customer_id as primary key for joins. Always include customer_name
+      when displaying customer information. Use state for US state-level filtering
+      or grouping
+    grain: 一行一个客户；customer_id 标识客户
+    relationships: Customers.customer_id = Orders.customer_id
   Invoices:
-    description: 'Stores invoice information with unique invoice numbers, dates, and details'
-    selection_rule: 'Select when queries involve billing, invoice tracking, or financial reporting'
-    sql_rule: 'Use invoice_number as primary key. Filter by invoice_date for temporal queries'
+    description: Stores invoice information with unique invoice numbers, dates, and
+      details
+    selection_rule: Select when queries involve billing, invoice tracking, or financial
+      reporting
+    sql_rule: Use invoice_number as primary key. Filter by invoice_date for temporal
+      queries
+    grain: 一行一张发票；invoice_number 是编号而非金额
+    relationships: Invoices.invoice_number = Shipments.invoice_number; 通过 Shipments
+      关联 Orders
   Order_Items:
-    description: 'Links products to orders with individual item status and details'
-    selection_rule: 'Select when queries need product details within orders or item-level status tracking'
-    sql_rule: 'Always join with Products table via product_id and Orders table via order_id for complete information'
+    description: Links products to orders with individual item status and details
+    selection_rule: Select when queries need product details within orders or item-level
+      status tracking
+    sql_rule: Join Products via product_id or Orders via order_id only when their
+      fields or filters are needed
+    grain: 一行一个订单明细；order_item_id 标识明细；没有 quantity 字段
+    relationships: Order_Items.order_id = Orders.order_id; Order_Items.product_id
+      = Products.product_id
   Orders:
-    description: 'Main order table containing order status, placement date, and customer relationships'
-    selection_rule: 'Select when queries involve order status, order history, or customer order relationships'
-    sql_rule: 'Use order_id as primary key. Join with Customers via customer_id for customer information'
+    description: Main order table containing order status, placement date, and customer
+      relationships
+    selection_rule: Select when queries involve order status, order history, or customer
+      order relationships
+    sql_rule: Use order_id as primary key. Join with Customers via customer_id for
+      customer information
+    grain: 一行一个订单；order_id 标识订单
+    relationships: Orders.customer_id = Customers.customer_id; Orders.order_id = Order_Items.order_id;
+      Orders.order_id = Shipments.order_id
   Products:
-    description: 'Product catalog containing product names, IDs, and detailed product information'
-    selection_rule: 'Select when queries involve product information, product searches, or inventory-related questions'
-    sql_rule: 'Use product_id as primary key. Use LIKE operator for product_name searches'
+    description: Product catalog containing product names, IDs, and detailed product
+      information
+    selection_rule: Select when queries involve product information, product searches,
+      or inventory-related questions
+    sql_rule: Use product_id as primary key. Use LIKE operator for product_name searches
+    grain: 一行一个产品；product_id 标识产品；没有 price 或库存字段
+    relationships: Products.product_id = Order_Items.product_id
   Shipment_Items:
-    description: 'Junction table linking shipments to specific order items'
-    selection_rule: 'Select when queries need to track which specific items are in which shipments'
-    sql_rule: 'Always join with both Shipments and Order_Items tables. No primary key - composite key of shipment_id and order_item_id'
+    description: Junction table linking shipments to specific order items
+    selection_rule: Select when queries need to track which specific items are in
+      which shipments
+    sql_rule: Join Shipments or Order_Items only when needed; do not assume (shipment_id,
+      order_item_id) is unique
+    grain: 一行一条发货明细关联；数据不保证组合键唯一
+    relationships: Shipment_Items.shipment_id = Shipments.shipment_id; Shipment_Items.order_item_id
+      = Order_Items.order_item_id
   Shipments:
-    description: 'Shipment tracking information including tracking numbers, dates, and shipment details'
-    selection_rule: 'Select when queries involve shipping, delivery tracking, or fulfillment information'
-    sql_rule: 'Use shipment_id as primary key. Join with Orders via order_id and Invoices via invoice_number for complete shipping context'
+    description: Shipment tracking information including tracking numbers, dates,
+      and shipment details
+    selection_rule: Select when queries involve shipping, delivery tracking, or fulfillment
+      information
+    sql_rule: Use shipment_id as primary key. Join with Orders via order_id and Invoices
+      via invoice_number only when their fields or filters are needed
+    grain: 一行一个发货批次；同一订单可多次发货
+    relationships: Shipments.order_id = Orders.order_id; Shipments.invoice_number
+      = Invoices.invoice_number

@@ -487,3 +487,62 @@ def test_graph_extraction_and_score_validate_model_json():
     assert score_sql(llm, "count orders", "SELECT 1", "Orders", _success()).score == 0.2
     with pytest.raises(ValueError, match="0 到 1"):
         score_sql(llm, "count orders", "SELECT 1", "Orders", _success())
+
+
+def test_semantic_errors_are_repaired_before_finalizing(tmp_path, monkeypatch):
+    graph, connection, calls = _make_graph(
+        tmp_path, monkeypatch,
+        sqls=["SELECT 1", "SELECT 2"], results=[_success(), _success()],
+        scores=[QualityScore(0.6, ["一对多重复计数，应去重"], ("calc",)), QualityScore(0.9, [])],
+    )
+    try:
+        state = _start(graph)
+        assert state["status"] == "success"
+        assert state["semantic_retry_count"] == 1
+        assert "一对多重复计数" in calls["revised"][0][-1]
+        assert calls["executed"] == ["SELECT 1", "SELECT 2"]
+    finally:
+        connection.close()
+
+
+def test_semantic_repair_budget_ends_in_review(tmp_path, monkeypatch):
+    graph, connection, calls = _make_graph(
+        tmp_path, monkeypatch, sqls=["SELECT 1"] * 3, results=[_success()] * 3,
+        scores=[QualityScore(0.5, ["wrong aggregation"], ("calc",))] * 3,
+    )
+    try:
+        state = _start(graph)
+        assert state["__interrupt__"][0].value["kind"] == "sql_review"
+        assert state["semantic_retry_count"] == 2
+        assert len(calls["executed"]) == 3
+    finally:
+        connection.close()
+
+
+def test_multiple_human_edits_preserve_all_requirements(tmp_path, monkeypatch):
+    graph, connection, calls = _make_graph(
+        tmp_path, monkeypatch, sqls=["SELECT 1", "SELECT 2", "SELECT 3"],
+        results=[_success()] * 3, scores=[QualityScore(0.3, [])] * 3,
+    )
+    try:
+        _start(graph)
+        _resume(graph, {"decision": "edit_sql", "feedback": "保留没有订单的客户"})
+        state = _resume(graph, {"decision": "edit_sql", "feedback": "订单计数要去重"})
+        assert "保留没有订单的客户" in calls["revised"][-1][-1]
+        assert "订单计数要去重" in calls["revised"][-1][-1]
+        assert len(state["sql_feedback_history"]) == 2
+    finally:
+        connection.close()
+
+
+def test_false_check_overrides_high_self_reported_score():
+    class LLM:
+        def invoke(self, messages):
+            return SimpleNamespace(content=json.dumps({
+                "score": 0.99, "reasons": ["重复计数"],
+                "checks": {key: key != "calc" for key in
+                           ("select_columns", "where", "calc", "subquery", "joins", "exec_result")},
+            }))
+    evaluated = score_sql(LLM(), "订单数", "SELECT 1", "Orders", _success())
+    assert evaluated.score < text2sql_graph.CONFIDENCE_THRESHOLD
+    assert evaluated.failed_checks == ("calc",)

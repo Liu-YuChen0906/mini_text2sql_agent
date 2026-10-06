@@ -1,6 +1,5 @@
 """Mini 主链路的离线回归测试，不连接真实模型或在线向量服务。"""
 
-import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -133,33 +132,26 @@ def selection_response():
     }
 
 
-def test_link_and_context_match_before_refactor():
-    """用途：核对正常路径与重构前的固定输出逐字一致。
+def test_link_and_context_include_business_rules_and_bridge_tables():
+    """用途：验证选表与上下文包含业务口径及完整候选表。
 
     参数输入：无；使用固定模型响应、真实目录及假检索结果。
-    输出：None；断言选表、模型提示、上下文哈希和检索参数。
+    输出：None；断言选表、业务上下文与检索参数。
     """
     linker, llm, indexes = make_linker([question_response(), selection_response()])
     linked = linker.link("Show customer name and order status")
     context = build_sql_context(linked, linker.catalog, indexes.text2sql)
 
-    def digest(value):
-        """用途：计算用于逐字对照的文本哈希。
-
-        参数输入：value（str）是模型提示或 SQL 上下文文本。
-        输出：str，文本 UTF-8 编码后的 SHA-256 十六进制摘要。
-        """
-        return hashlib.sha256(value.encode()).hexdigest()
-
     assert [(item.table, item.columns) for item in linked.selected] == [
         ("Customers", ["customer_name", "customer_id"]),
         ("Orders", ["order_status", "customer_id"]),
     ]
-    assert [digest(system + "\x00" + user) for system, user in llm.calls] == [
-        "33997bb922a5d7c88430e90705d0e913501a4b4e4d659767ae6c659022557891",
-        "2ddd587c20e4bdf6f8d2c28733aa7153031d014607b68c241f54d83253aca71a",
-    ]
-    assert digest(context) == "7c71957113719e4c4af4045ce412eb92ac5ada9d8bb3995c47abcd5b94b28749"
+    assert "只能使用列出的表和字段" in llm.calls[1][0]
+    assert "中间桥接表" in llm.calls[1][0]
+    assert "Shipment_Items" in llm.calls[1][0]
+    assert "Relationships:" in context and "Business knowledge and glossary:" in context
+    assert "编号不是发票金额" in context
+    assert "Relevant SQL examples:" in context
     assert indexes.columns.calls == [("similarity", "customer_name order_status", 12)]
     assert indexes.table_selection_example.calls == [("mmr", "customer_name order_status", 5, 20)]
     assert indexes.text2sql.calls == [("mmr", "Show customer name and order status", 5, 20)]
@@ -174,7 +166,7 @@ def test_no_candidate_table(monkeypatch):
     from mini.query import schema_linking
 
     linker, llm, _ = make_linker([question_response()])
-    monkeypatch.setattr(schema_linking, "_related_columns", lambda *_: {"not_a_real_column"})
+    monkeypatch.setattr(linker.adapter, "list_columns", lambda *_: {})
     with pytest.raises(ValueError, match="Catalog 中没有与数据库一致的候选表"):
         linker.link("Show customer name and order status")
     assert len(llm.calls) == 1
@@ -226,7 +218,7 @@ def test_retrieval_failure_keeps_text_match_and_table_context(capsys):
     context = build_sql_context(linked, linker.catalog, indexes.text2sql)
     assert [item.table for item in linked.selected] == ["Customers", "Orders"]
     assert "Table: Customers" in context
-    assert context.endswith("Relevant SQL examples:\n")
+    assert "Relevant SQL examples:" in context and "A: SELECT" in context
     errors = capsys.readouterr().err
     assert "字段向量检索不可用" in errors
     assert "选表示例检索不可用" in errors
@@ -297,7 +289,7 @@ def test_generate_sql_uses_injected_model():
     assert "Schema:\nTable: Orders" in seen[0][0].content
     assert seen[0][1].content == "问题"
     assert generate_sql("问题", "Table: Orders", RunnableLambda(respond), "postgres") == "SELECT 1"
-    assert "postgres SELECT query" in seen[1][0].content
+    assert "postgres SELECT / WITH" in seen[1][0].content
 
 
 def test_revise_sql_passes_human_feedback_to_model():

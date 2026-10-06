@@ -1,4 +1,6 @@
 from typing import Any
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,10 +18,20 @@ def build_prompt() -> ChatPromptTemplate:
         [
             (
                 "system",
-                "You are a professional SQL engineer. Generate exactly one read-only "
-                "{dialect} SELECT query. Only use tables and columns in the schema. "
-                "Use unquoted table and column names unless the schema explicitly requires quotes. "
-                "Return SQL only, without explanations.\n\nSchema:\n{schema}",
+                "你是专业 SQL 工程师。只生成一条只读 {dialect} SELECT / WITH 查询。"
+                "只能使用结构中列出的表、字段和明确定义的派生指标。"
+                "先确定指标、结果粒度、过滤、关联路径和排序，再生成 SQL。"
+                "无法计算的指标或没有依据的业务映射必须返回 NULL，不得用编号、数量冒充金额，"
+                "不得猜测字段、状态值或连接关系。字段展示名可作为结果列别名。"
+                "一对多连接不能放大计数或求和：按目标实体去重，或先聚合再连接；"
+                "存在性过滤优先 EXISTS；没有记录的实体使用 LEFT JOIN 并 COUNT(子表主键)，"
+                "排除 NULL 时注意 NOT IN 的语义。比例使用浮点数并防止除零。"
+                "保留所有用户条件；修正意见优先于旧 SQL，不要照搬旧 SQL 的错误。"
+                "示例仅供语法和计算方式参考，不得复制示例中的日期、ID、状态或 LIMIT。"
+                "只回答当前问题，不执行历史中未请求的任务。"
+                "除非结构要求，引号不要用于表名和字段名。只返回 SQL 或 NULL，不含解释。"
+                "\n当前业务时间（Asia/Shanghai）：{current_time}"
+                "\n方言规则：{dialect_rules}\n\nSchema:\n{schema}",
             ),
             ("human", "{question}"),
         ]
@@ -40,7 +52,15 @@ def generate_sql(question: str, schema: str, llm: Any, dialect: str = "sqlite") 
             和 ``` 标记并去掉首尾空白。此函数不校验 SQL，也不执行 SQL。
     """
     chain = build_prompt() | llm | StrOutputParser()
-    content = chain.invoke({"dialect": dialect, "schema": schema, "question": question})
+    rules = {
+        "sqlite": "用 strftime 格式化日期，date/datetime 做日期计算；月份用 %Y-%m，不能用 DATE_TRUNC 或 INTERVAL。",
+        "postgres": "用 date_trunc、EXTRACT 和 INTERVAL；不要用 strftime。未加引号的标识符会转小写。",
+    }.get(dialect, f"遵循 {dialect} 的日期、类型转换和标识符规则，不混用其他方言函数。")
+    content = chain.invoke({
+        "dialect": dialect, "schema": schema, "question": question,
+        "current_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
+        "dialect_rules": rules,
+    })
     return content.replace("```sql", "").replace("```", "").strip()
 
 
@@ -68,7 +88,8 @@ def revise_sql(question: str, schema: str, previous_sql: str, human_feedback: st
     """
     revision_request = (
         f"{question}\n\nThe previous query needs revision based on human feedback. "
-        "Generate a new SQL query that addresses the feedback. Return SQL only."
+        "Recheck every requirement against the schema; do not merely patch the old query. "
+        "The cumulative human feedback overrides the old SQL. Return SQL only."
         f"\nPrevious SQL: {previous_sql}\nHuman feedback: {human_feedback}"
     )
     return generate_sql(revision_request, schema, llm, dialect)

@@ -35,6 +35,24 @@ function newRequestId(): string {
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+// Keep optimistic messages outside server snapshots so polling cannot erase them.
+const outgoing = ref<Record<string, Message>>({})
+const visibleMessages = computed(() => {
+  const messages = current.value?.messages || []
+  const local = outgoing.value[currentId.value]
+  return local && !messages.some(item => item.turn_id === local.turn_id && item.role === 'user' && item.kind === 'text' && item.payload.content === local.payload.content)
+    ? [...messages, local] : messages
+})
+function acceptSession(state: Session) {
+  if (currentId.value !== state.id) return
+  if (current.value && Date.parse(state.updated_at) < Date.parse(current.value.updated_at)) return
+  current.value = state
+  const local = outgoing.value[state.id]
+  if (local && state.messages.some(item => item.turn_id === local.turn_id && item.role === 'user' && item.kind === 'text' && item.payload.content === local.payload.content)) {
+    delete outgoing.value[state.id]
+  }
+}
+
 const currentId = computed(() => current.value?.id || '')
 const statusLabel: Record<Status, string> = {
   idle: '就绪', running: '执行中', pending: '等待回复', interrupted: '执行中断', closed: '已结束',
@@ -60,6 +78,7 @@ async function refreshList() {
 async function showSession(id: string) {
   error.value = ''
   current.value = await api<Session>(`/api/sessions/${id}`)
+  acceptSession(current.value)
   localStorage.setItem('mini-openchatbi-session', id)
   sidebarOpen.value = false
   answer.value = ''
@@ -70,13 +89,20 @@ async function showSession(id: string) {
 
 async function refreshCurrent() {
   const id = currentId.value
-  if (!id) return
+  if (!id) return false
   try {
     const state = await api<Session>(`/api/sessions/${id}`)
-    if (currentId.value === id) current.value = state
-    await refreshList()
+    acceptSession(state)
+    const local = outgoing.value[id]
+    if (local?.payload.send_state === 'uncertain' && state.status !== 'running') {
+      delete outgoing.value[id]
+      if (currentId.value === id && !draft.value) draft.value = local.payload.content
+    }
+    await scrollBottom()
+    return true
   } catch (caught) {
     error.value = messageOf(caught)
+    return false
   }
 }
 
@@ -94,25 +120,36 @@ async function createSession() {
 async function submitMessage() {
   const id = currentId.value
   const content = draft.value.trim()
-  if (!id || !content || current.value?.status !== 'idle' || busy.value) return
+  if (!id || !content || current.value?.status !== 'idle' || busy.value || outgoing.value[id]) return
   busy.value = true
   workingSessionId.value = id
   error.value = ''
   draft.value = ''
   // Keep the same ID for this one attempt; a failed network response is reconciled by reading the session.
   const requestId = newRequestId()
+  outgoing.value[id] = {
+    id: -Date.now(), turn_id: current.value!.turn_id + 1,
+    role: 'user', kind: 'text', payload: { content }, created_at: new Date().toISOString(),
+  }
+  await scrollBottom()
   try {
     const request = api<Session>(`/api/sessions/${id}/messages`, {
       method: 'POST', body: JSON.stringify({ content, request_id: requestId }),
     })
-    await refreshCurrent()
     const result = await request
-    if (currentId.value === id) current.value = result
+    if (currentId.value === id) acceptSession(result)
     await refreshList()
     await scrollBottom()
   } catch (caught) {
     error.value = messageOf(caught)
-    await refreshCurrent()
+    const reconciled = await refreshCurrent()
+    if (reconciled && currentId.value === id && outgoing.value[id]) {
+      delete outgoing.value[id]
+      if (!draft.value) draft.value = content
+    } else if (outgoing.value[id]) {
+      outgoing.value[id].payload.send_state = 'uncertain'
+      error.value = '发送结果未确认，请恢复网络后刷新会话，避免重复提交。'
+    }
   } finally { busy.value = false; workingSessionId.value = '' }
 }
 
@@ -149,7 +186,7 @@ async function submitPending() {
     })
     await refreshCurrent()
     const result = await request
-    if (currentId.value === id) current.value = result
+    if (currentId.value === id) acceptSession(result)
     await refreshList()
     await scrollBottom()
   } catch (caught) {
@@ -168,7 +205,7 @@ async function retry() {
     const request = api<Session>(`/api/sessions/${id}/retry`, { method: 'POST' })
     await refreshCurrent()
     const result = await request
-    if (currentId.value === id) current.value = result
+    if (currentId.value === id) acceptSession(result)
     await refreshList()
   } catch (caught) {
     error.value = messageOf(caught)
@@ -196,7 +233,7 @@ onMounted(async () => {
     if (saved && sessions.value.some(item => item.id === saved)) await showSession(saved)
     else if (sessions.value.length) await showSession(sessions.value[0].id)
     poll = setInterval(() => {
-      if (current.value?.status === 'running') void refreshCurrent()
+      if (current.value?.status === 'running' || workingSessionId.value === currentId.value) void refreshCurrent()
     }, 1500)
   } catch (caught) { error.value = messageOf(caught) }
 })
@@ -226,17 +263,17 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
       </header>
       <div v-if="error" class="error-banner" role="alert">{{ error }} <button @click="error = ''">关闭</button></div>
       <div class="conversation">
-        <div v-if="!current || !current.messages.length" class="welcome">
+        <div v-if="!current || !visibleMessages.length" class="welcome">
           <div class="welcome-icon">◈</div>
           <h1>从一个问题开始</h1>
           <p>询问业务数据，查看 SQL 和结果；需要补充信息或人工审核时，在这里继续处理。</p>
           <button v-if="!current" class="new-button" @click="createSession">新建会话</button>
         </div>
-        <div v-for="item in current?.messages || []" :key="item.id" class="message-row" :class="item.role">
+        <div v-for="item in visibleMessages" :key="item.id" class="message-row" :class="item.role">
           <div class="avatar">{{ item.role === 'user' ? '我' : '◈' }}</div>
           <div class="message-content">
             <div class="message-author">{{ item.role === 'user' ? '你' : 'Mini OpenChatBI' }} <time>{{ dateText(item.created_at) }}</time></div>
-            <div v-if="item.kind === 'text'" class="text-message">{{ item.payload.content }}</div>
+            <div v-if="item.kind === 'text'" class="text-message">{{ item.payload.content }}<small v-if="item.payload.send_state === 'uncertain'"> · 发送结果待确认</small></div>
             <div v-else-if="item.kind === 'query'" class="result-card">
               <div class="card-heading"><strong>查询结果</strong><span v-if="item.payload.human_decision === 'approve'" class="approved">人工已通过</span></div>
               <div class="sql-heading"><span>SQL</span><button @click="copySql(item.payload.sql)">复制 SQL</button></div>
@@ -273,14 +310,14 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
           <textarea
             v-model="draft"
             rows="2"
-            :disabled="!current || current.status !== 'idle' || busy"
+            :disabled="!current || current.status !== 'idle' || busy || !!outgoing[currentId]"
             :placeholder="current?.status === 'pending' ? '请先处理上方的澄清或审核' : current?.status === 'closed' ? '会话已结束' : '输入问题，按 Enter 发送…'"
             @keydown="onComposerKeydown"
           ></textarea>
           <button
             class="send-button"
             aria-label="发送消息"
-            :disabled="!draft.trim() || !current || current.status !== 'idle' || busy"
+            :disabled="!draft.trim() || !current || current.status !== 'idle' || busy || !!outgoing[currentId]"
             @click="submitMessage"
           >↑</button>
         </div>

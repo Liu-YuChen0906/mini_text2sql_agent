@@ -1,0 +1,830 @@
+{
+  "reference_queries_passed": 50,
+  "model_tested": false,
+  "mini_adapter_results": [
+    {
+      "id": 1,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 2,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 3,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 4,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 5,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 6,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 7,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 8,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 9,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 10,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 11,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 12,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 13,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 14,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 15,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 16,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 17,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 18,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 19,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 20,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 21,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 22,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 23,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 24,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 25,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 26,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 27,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 28,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 29,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 30,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 31,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 32,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 33,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 34,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 35,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 36,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 37,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 38,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 39,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 40,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 41,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 42,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 43,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 44,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 45,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 46,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 47,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 48,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 49,
+      "status": "success",
+      "error": null
+    },
+    {
+      "id": 50,
+      "status": "success",
+      "error": null
+    }
+  ],
+  "negative_shipment_records": 485,
+  "negative_first_shipment_orders": 485,
+  "cases": [
+    {
+      "id": 1,
+      "question": "数据库里一共有多少位客户？",
+      "assessment": "可直接查询",
+      "note": "Customers 一行一客户。",
+      "row_count": 1,
+      "columns": [
+        "customer_count"
+      ]
+    },
+    {
+      "id": 2,
+      "question": "数据库里一共有多少笔订单？",
+      "assessment": "可直接查询",
+      "note": "Orders 一行一订单。",
+      "row_count": 1,
+      "columns": [
+        "order_count"
+      ]
+    },
+    {
+      "id": 3,
+      "question": "数据库里一共有多少种商品？",
+      "assessment": "需明确口径",
+      "note": "需区分 product_id 对应的商品记录数，与 DISTINCT product_name 对应的名称/类别数；参考 SQL 按 product_id。",
+      "row_count": 1,
+      "columns": [
+        "product_count"
+      ]
+    },
+    {
+      "id": 4,
+      "question": "各个州分别有多少位客户？",
+      "assessment": "可直接查询",
+      "note": "按 state 分组，NULL 单列为未知。",
+      "row_count": 50,
+      "columns": [
+        "state",
+        "customer_count"
+      ]
+    },
+    {
+      "id": 5,
+      "question": "客户数量最多的十个州是哪些？",
+      "assessment": "可直接查询",
+      "note": "按客户数取十州；同数时按州名排序，不额外纳入并列。",
+      "row_count": 10,
+      "columns": [
+        "state",
+        "customer_count"
+      ]
+    },
+    {
+      "id": 6,
+      "question": "名称中包含“phone”的商品有哪些？",
+      "assessment": "可直接查询",
+      "note": "按 product_name 包含匹配；SQLite LIKE 默认 ASCII 不区分大小写。",
+      "row_count": 4,
+      "columns": [
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 7,
+      "question": "哪些商品的名称以“music-”开头？",
+      "assessment": "可直接查询",
+      "note": "前缀 music-；空结果也可能正确。",
+      "row_count": 68,
+      "columns": [
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 8,
+      "question": "最近创建的二十笔订单分别是什么时候下的？",
+      "assessment": "可直接查询",
+      "note": "用 date_order_placed 排序，不按 order_id 推断时间；同刻用 ID 稳定排序。",
+      "row_count": 20,
+      "columns": [
+        "order_id",
+        "date_order_placed"
+      ]
+    },
+    {
+      "id": 9,
+      "question": "当前处于 Pending 状态的订单有多少笔？",
+      "assessment": "可直接查询",
+      "note": "实际值为 Pending，大小写必须准确。",
+      "row_count": 1,
+      "columns": [
+        "order_count"
+      ]
+    },
+    {
+      "id": 10,
+      "question": "各种订单状态分别有多少笔？",
+      "assessment": "可直接查询",
+      "note": "统计 Orders.order_status。",
+      "row_count": 6,
+      "columns": [
+        "order_status",
+        "order_count"
+      ]
+    },
+    {
+      "id": 11,
+      "question": "各种订单明细状态分别有多少条？",
+      "assessment": "可直接查询",
+      "note": "统计 Order_Items.order_item_status。",
+      "row_count": 5,
+      "columns": [
+        "order_item_status",
+        "item_count"
+      ]
+    },
+    {
+      "id": 12,
+      "question": "每位客户各下过多少笔订单？",
+      "assessment": "可直接查询",
+      "note": "按 customer_id 分组，LEFT JOIN 保留零订单客户，不能 COUNT(*)。",
+      "row_count": 998,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "order_count"
+      ]
+    },
+    {
+      "id": 13,
+      "question": "下单次数最多的十位客户是谁？",
+      "assessment": "可直接查询",
+      "note": "按订单数取十位，按客户 ID 打破并列。",
+      "row_count": 10,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "order_count"
+      ]
+    },
+    {
+      "id": 14,
+      "question": "有多少位客户从未下过订单？",
+      "assessment": "可直接查询",
+      "note": "NOT EXISTS 查询无订单客户。",
+      "row_count": 1,
+      "columns": [
+        "customer_count"
+      ]
+    },
+    {
+      "id": 15,
+      "question": "每笔订单包含多少条商品明细？",
+      "assessment": "可直接查询",
+      "note": "LEFT JOIN 保留无明细订单，COUNT(order_item_id)。",
+      "row_count": 5893,
+      "columns": [
+        "order_id",
+        "item_count"
+      ]
+    },
+    {
+      "id": 16,
+      "question": "平均每笔订单包含多少条商品明细？",
+      "assessment": "可直接查询",
+      "note": "分母是全部订单，含零明细订单；先逐单计数，再 AVG。",
+      "row_count": 1,
+      "columns": [
+        "avg_item_count"
+      ]
+    },
+    {
+      "id": 17,
+      "question": "哪些订单包含的商品明细最多？",
+      "assessment": "可直接查询",
+      "note": "返回全部并列最多订单。",
+      "row_count": 551,
+      "columns": [
+        "order_id",
+        "item_count"
+      ]
+    },
+    {
+      "id": 18,
+      "question": "每种商品出现在多少笔不同的订单中？",
+      "assessment": "可直接查询",
+      "note": "按 product_id 分组，COUNT(DISTINCT order_id)，保留零订单商品。",
+      "row_count": 1000,
+      "columns": [
+        "product_id",
+        "product_name",
+        "order_count"
+      ]
+    },
+    {
+      "id": 19,
+      "question": "被订购次数最多的十种商品是什么？",
+      "assessment": "需明确口径",
+      "note": "需明确次数是不同订单数还是明细记录数；参考 SQL 按不同订单数，不能视作商品件数。",
+      "row_count": 10,
+      "columns": [
+        "product_id",
+        "product_name",
+        "order_count"
+      ]
+    },
+    {
+      "id": 20,
+      "question": "从未出现在任何订单中的商品有哪些？",
+      "assessment": "可直接查询",
+      "note": "NOT EXISTS；返回商品 ID 和名称。",
+      "row_count": 0,
+      "columns": [
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 21,
+      "question": "最近二十笔订单的客户姓名和订单状态是什么？",
+      "assessment": "可直接查询",
+      "note": "同第8题按真实下单时间取最近二十单。",
+      "row_count": 20,
+      "columns": [
+        "order_id",
+        "customer_name",
+        "order_status",
+        "date_order_placed"
+      ]
+    },
+    {
+      "id": 22,
+      "question": "各州客户分别下了多少笔订单？",
+      "assessment": "可直接查询",
+      "note": "由客户州关联订单，保留零订单的已有州；没有历史地址，统计的是当前客户州。",
+      "row_count": 50,
+      "columns": [
+        "state",
+        "order_count"
+      ]
+    },
+    {
+      "id": 23,
+      "question": "哪些客户下过处于 Returned 状态的订单？",
+      "assessment": "可直接查询",
+      "note": "用 EXISTS 每位客户只出现一次。",
+      "row_count": 616,
+      "columns": [
+        "customer_id",
+        "customer_name"
+      ]
+    },
+    {
+      "id": 24,
+      "question": "某位客户的全部订单分别包含哪些商品？",
+      "assessment": "需补参数",
+      "note": "必须提供 customer_id；姓名可能重名。保留该客户没有明细的订单。",
+      "row_count": 36,
+      "columns": [
+        "order_id",
+        "date_order_placed",
+        "order_item_id",
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 25,
+      "question": "每笔订单涉及多少种不同的商品？",
+      "assessment": "可直接查询",
+      "note": "商品种类按 product_id 去重，名称相同但 ID 不同仍是不同商品记录。",
+      "row_count": 5893,
+      "columns": [
+        "order_id",
+        "product_count"
+      ]
+    },
+    {
+      "id": 26,
+      "question": "同一笔订单中，哪些商品出现了不止一次？",
+      "assessment": "可直接查询",
+      "note": "按 (order_id, product_id) 统计明细条数>1，不是数量字段>1。",
+      "row_count": 20,
+      "columns": [
+        "order_id",
+        "product_id",
+        "product_name",
+        "item_count"
+      ]
+    },
+    {
+      "id": 27,
+      "question": "哪些订单包含状态为 Canceled 的商品明细？",
+      "assessment": "可直接查询",
+      "note": "判断明细 Canceled，不要误用订单状态。",
+      "row_count": 2988,
+      "columns": [
+        "order_id"
+      ]
+    },
+    {
+      "id": 28,
+      "question": "订单状态为 Delivered、但仍有商品明细处于 Pending 状态的订单有哪些？",
+      "assessment": "可直接查询",
+      "note": "Orders.Delivered 与 Order_Items.Pending 联合筛选，用 EXISTS 防重复。",
+      "row_count": 487,
+      "columns": [
+        "order_id"
+      ]
+    },
+    {
+      "id": 29,
+      "question": "每种订单状态下，各有多少条不同状态的商品明细？",
+      "assessment": "可直接查询",
+      "note": "按两个状态字段分组，每条明细算一次；未出现组合默认不补零。",
+      "row_count": 30,
+      "columns": [
+        "order_status",
+        "order_item_status",
+        "item_count"
+      ]
+    },
+    {
+      "id": 30,
+      "question": "哪些商品曾被处于 Returned 状态的订单订购？",
+      "assessment": "可直接查询",
+      "note": "按订单 Returned 找商品，每个 product_id 一次。",
+      "row_count": 969,
+      "columns": [
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 31,
+      "question": "数据中最早和最晚的下单时间分别是什么？",
+      "assessment": "可直接查询",
+      "note": "下单时间 MIN/MAX。",
+      "row_count": 1,
+      "columns": [
+        "first_order_time",
+        "last_order_time"
+      ]
+    },
+    {
+      "id": 32,
+      "question": "每个月分别新增了多少笔订单？",
+      "assessment": "可直接查询",
+      "note": "按年-月分组，不能只按月份号码合并不同年份。",
+      "row_count": 7,
+      "columns": [
+        "month",
+        "order_count"
+      ]
+    },
+    {
+      "id": 33,
+      "question": "每天的订单数量如何变化？",
+      "assessment": "可直接查询",
+      "note": "按日期分组；没有订单的日期默认不补零。",
+      "row_count": 183,
+      "columns": [
+        "day",
+        "order_count"
+      ]
+    },
+    {
+      "id": 34,
+      "question": "哪一天的下单数量最多？",
+      "assessment": "可直接查询",
+      "note": "返回全部并列最多日期。",
+      "row_count": 1,
+      "columns": [
+        "day",
+        "order_count"
+      ]
+    },
+    {
+      "id": 35,
+      "question": "2026 年第一季度各个月的订单状态分布如何？",
+      "assessment": "可直接查询",
+      "note": "时间区间 [2026-01-01,2026-04-01)，再按年-月和状态分组。",
+      "row_count": 18,
+      "columns": [
+        "month",
+        "order_status",
+        "order_count"
+      ]
+    },
+    {
+      "id": 36,
+      "question": "各州客户在每个月分别下了多少笔订单？",
+      "assessment": "可直接查询",
+      "note": "按年-月和当前客户州分组；未出现组合默认不补零。",
+      "row_count": 330,
+      "columns": [
+        "state",
+        "month",
+        "order_count"
+      ]
+    },
+    {
+      "id": 37,
+      "question": "每个月有多少位不同客户下过订单？",
+      "assessment": "可直接查询",
+      "note": "每月 COUNT(DISTINCT customer_id)。",
+      "row_count": 7,
+      "columns": [
+        "month",
+        "customer_count"
+      ]
+    },
+    {
+      "id": 38,
+      "question": "每位客户首次和最近一次下单分别是什么时候？",
+      "assessment": "可直接查询",
+      "note": "保留零订单客户，其首次/最近时间为 NULL。",
+      "row_count": 998,
+      "columns": [
+        "customer_id",
+        "customer_name",
+        "first_order_time",
+        "last_order_time"
+      ]
+    },
+    {
+      "id": 39,
+      "question": "哪些客户在首次下单后又再次下单？",
+      "assessment": "可直接查询",
+      "note": "按题目“首次之后”严格要求 MAX(time)>MIN(time)；仅同一时刻两笔单不算之后。若要两笔及以上订单，应另用 COUNT(order_id)>=2。",
+      "row_count": 983,
+      "columns": [
+        "customer_id",
+        "customer_name"
+      ]
+    },
+    {
+      "id": 40,
+      "question": "哪些订单的发票日期与下单日期不是同一天？",
+      "assessment": "可直接查询",
+      "note": "Orders→Shipments→Invoices；任一关联发票日期不同即入选，订单去重；无关联发票或 NULL 日期不能判定。",
+      "row_count": 0,
+      "columns": [
+        "order_id"
+      ]
+    },
+    {
+      "id": 41,
+      "question": "每种订单状态分别对应多少笔发货记录？",
+      "assessment": "可直接查询",
+      "note": "计数 Shipments.shipment_id，不能计数订单或重复关联后的明细。",
+      "row_count": 6,
+      "columns": [
+        "order_status",
+        "shipment_count"
+      ]
+    },
+    {
+      "id": 42,
+      "question": "哪些订单尚未关联发货记录？",
+      "assessment": "可直接查询",
+      "note": "NOT EXISTS Shipments，不按 order_status 代替关联关系。",
+      "row_count": 0,
+      "columns": [
+        "order_id"
+      ]
+    },
+    {
+      "id": 43,
+      "question": "哪些订单对应了不止一笔发货记录？",
+      "assessment": "可直接查询",
+      "note": "按 order_id 聚合 Shipments 的记录数>1。",
+      "row_count": 0,
+      "columns": [
+        "order_id",
+        "shipment_count"
+      ]
+    },
+    {
+      "id": 44,
+      "question": "每笔订单从下单到首次发货间隔了多久？",
+      "assessment": "需处理异常",
+      "note": "可算，但真实数据有早于下单的发货；参考 SQL 保留负时间差，无发货为 NULL，单位小时，首次=MIN(shipment_date)。",
+      "row_count": 5893,
+      "columns": [
+        "order_id",
+        "date_order_placed",
+        "first_shipment_time",
+        "hours_to_first_shipment"
+      ]
+    },
+    {
+      "id": 45,
+      "question": "下单到首次发货间隔最长的十笔订单是哪些？",
+      "assessment": "需处理异常",
+      "note": "需明确异常处理；参考 SQL 排除首次发货早于下单及无日期订单，再取最长十单。不要擅自改成首次非负发货。",
+      "row_count": 10,
+      "columns": [
+        "order_id",
+        "date_order_placed",
+        "first_shipment_time",
+        "hours_to_first_shipment"
+      ]
+    },
+    {
+      "id": 46,
+      "question": "每笔发货记录包含多少条订单明细？",
+      "assessment": "可直接查询",
+      "note": "经 Shipment_Items 计数 DISTINCT order_item_id，保留零明细发货；组合关系没有唯一约束。",
+      "row_count": 5893,
+      "columns": [
+        "shipment_id",
+        "item_count"
+      ]
+    },
+    {
+      "id": 47,
+      "question": "哪些发货记录没有关联任何订单明细？",
+      "assessment": "可直接查询",
+      "note": "NOT EXISTS Shipment_Items。",
+      "row_count": 0,
+      "columns": [
+        "shipment_id"
+      ]
+    },
+    {
+      "id": 48,
+      "question": "某个运单号对应的客户、订单、商品和发货日期是什么？",
+      "assessment": "需补参数",
+      "note": "必须提供 tracking_number；走 Shipment_Items 找发货商品，不能取订单所有商品；运单号无唯一约束，返回全部匹配发货及明细。",
+      "row_count": 3,
+      "columns": [
+        "shipment_id",
+        "shipment_tracking_number",
+        "order_id",
+        "customer_id",
+        "customer_name",
+        "shipment_date",
+        "order_item_id",
+        "item_order_id",
+        "product_id",
+        "product_name"
+      ]
+    },
+    {
+      "id": 49,
+      "question": "哪些订单明细尚未关联任何发货记录？",
+      "assessment": "可直接查询",
+      "note": "左连接反查询 Shipment_Items；当前无该外键索引，相关 NOT EXISTS 曾超过 Mini 的2秒时限。与订单是否关联发货是不同层级。",
+      "row_count": 0,
+      "columns": [
+        "order_item_id",
+        "order_id",
+        "product_id"
+      ]
+    },
+    {
+      "id": 50,
+      "question": "哪些发货记录关联的订单明细不属于该发货记录对应的订单？",
+      "assessment": "可直接查询",
+      "note": "比较 Shipments.order_id 和桥接明细 Order_Items.order_id；不能预先用二者相等作为 JOIN 条件。",
+      "row_count": 0,
+      "columns": [
+        "shipment_id",
+        "shipment_order_id",
+        "order_item_id",
+        "item_order_id"
+      ]
+    }
+  ]
+}
