@@ -200,3 +200,73 @@ def test_restart_then_resume_analysis_query(tmp_path, monkeypatch):
         assert len(service2.store.list("restart", run, "dataset")) == 2
     finally:
         conn.close()
+
+
+def test_budget_exhausted_at_sql_score_is_not_a_human_review(tmp_path, monkeypatch):
+    from mini.agents import text2sql_graph
+    from mini.runtime.limits import ExecutionBudgetExceeded
+
+    model = ScriptedAnalysisModel()
+    graph, connection, service, calls = analysis_parent(tmp_path, monkeypatch, model)
+
+    def budget_score(*args, **kwargs):
+        raise ExecutionBudgetExceeded("budget_exhausted:models")
+
+    monkeypatch.setattr(text2sql_graph, "score_sql", budget_score)
+    try:
+        result = graph.invoke(
+            new_agent_turn("test budget stop", 1),
+            {"configurable": {"thread_id": "budget-score"}},
+        )
+        assert "__interrupt__" not in result
+        report = result["analysis_outcome"]
+        assert report["status"] == "failed" and "budget_exhausted" in str(
+            report["limitations"]
+        )
+        assert all(
+            e["status"] != "running"
+            for e in service.store.list("budget-score", report["run_id"], "evidence")
+        )
+    finally:
+        connection.close()
+
+
+def test_text_only_finish_gets_one_bounded_report_completion(tmp_path, monkeypatch):
+    from mini.analysis.models import AnalysisTask
+    from mini.analysis.validation import submit_report
+
+    service = AnalysisService(
+        AnalysisConfig(evidence_dir=str(tmp_path)), None, lambda: None
+    )
+    run = service.start("s", 1, AnalysisTask(question="finish", input_dataset_ids=[]))
+    monkeypatch.setattr(service, "database_schema", lambda: {})
+    calls = []
+
+    class Graph:
+        def invoke(self, payload, config):
+            calls.append(payload)
+            if len(calls) == 2:
+                submit_report(service.store, "s", run, [], ["offline completion test"])
+            return {"messages": [AIMessage(content="done")]}
+
+    monkeypatch.setattr(
+        "mini.analysis.agent.build_data_analysis_agent", lambda *a: Graph()
+    )
+    result = service.invoke("s", run, {})
+    assert len(calls) == 2 and result["report_id"]
+    assert "submit_analysis_report" in calls[1]["messages"][-1]["content"]
+
+    run2 = service.start("s", 2, AnalysisTask(question="refuses"))
+    calls.clear()
+
+    class Refuses:
+        def invoke(self, payload, config):
+            calls.append(payload)
+            return {"messages": [AIMessage(content="done")]}
+
+    monkeypatch.setattr(
+        "mini.analysis.agent.build_data_analysis_agent", lambda *a: Refuses()
+    )
+    result = service.invoke("s", run2, {})
+    assert len(calls) == 2 and result["status"] == "failed"
+    assert "子 Agent 未提交报告" in result["limitations"]

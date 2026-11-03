@@ -2,16 +2,18 @@
 
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langgraph.errors import GraphInterrupt
 
 from mini.analysis.execution.docker import DockerExecutor
-from mini.analysis.models import AnalysisConfig
+from mini.analysis.models import AnalysisConfig, now
 from mini.analysis.store import EvidenceStore, encode
 from mini.analysis.tools.runtime import AnalysisRuntime
 from mini.analysis.validation import read_report, submit_report
+from mini.runtime.limits import ExecutionBudgetExceeded
 
 
 class AnalysisService:
@@ -19,12 +21,50 @@ class AnalysisService:
         self.config, self.model, self.resources_factory = (
             config,
             model,
-            resources_factory,
+            lru_cache(maxsize=1)(resources_factory),
         )
         self.store = store or EvidenceStore(config.evidence_dir)
         self.store.prune(config.retention_days)
         self.executor = DockerExecutor(config)
         self.cancellations = {}
+
+    def extend_model_budget(self, session, run, limit, reason):
+        """Local operator recovery only; no model tool or HTTP endpoint exposes this method."""
+        record = self.store.get(session, run, "run")
+        old = record.get("model_call_limit", self.config.max_model_calls)
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or limit <= old
+            or limit > self.config.max_model_calls * 2
+            or not reason
+        ):
+            raise ValueError(
+                "recovery budget must increase once within twice the configured model limit"
+            )
+        record["model_call_limit"] = limit
+        record.setdefault("budget_adjustments", []).append(
+            {
+                "old_limit": old,
+                "new_limit": limit,
+                "reason": reason,
+                "created_at": now(),
+            }
+        )
+        self.store.save("run", run, session, run, record)
+        return record["budget_adjustments"][-1]
+
+    def database_schema(self):
+        """Supply real column names without spending a business query on schema discovery."""
+        resources = self.resources_factory()
+        catalog = getattr(resources, "catalog", None)
+        if not callable(getattr(catalog, "get_table_list", None)):
+            return {}
+        columns = resources.adapter.list_columns(catalog.get_table_list())
+        return {
+            "dialect": resources.adapter.dialect,
+            "tables": {table: sorted(names) for table, names in columns.items()},
+        }
 
     def cancel(self, session, run):
         self.store.get(session, run, "run")
@@ -58,10 +98,16 @@ class AnalysisService:
                 if runtime.cancel_event.is_set():
                     raise ValueError("cancelled")
                 if runtime.remaining() <= 0:
-                    raise ValueError("budget_exhausted:wall_clock")
-                owner.store.consume(
-                    session, run, "models", owner.config.max_model_calls
-                )
+                    raise ExecutionBudgetExceeded("budget_exhausted:wall_clock")
+                try:
+                    owner.store.consume(
+                        session,
+                        run,
+                        "models",
+                        record.get("model_call_limit", owner.config.max_model_calls),
+                    )
+                except ValueError as exc:
+                    raise ExecutionBudgetExceeded(str(exc)) from exc
 
         child_config = dict(config)
         callbacks = config.get("callbacks")
@@ -84,6 +130,9 @@ class AnalysisService:
                             "content": encode(
                                 {
                                     "task": record["task"],
+                                    "database_schema": self.database_schema()
+                                    if not record["task"]["input_dataset_ids"]
+                                    else {},
                                     "input_datasets": [
                                         self.store.get(session, identity, "dataset")
                                         for identity in record["task"][
@@ -100,6 +149,27 @@ class AnalysisService:
             if result.get("__interrupt__"):
                 raise GraphInterrupt(result["__interrupt__"])
             reports = self.store.list(session, run, "report")
+            if not reports and not runtime.cancel_event.is_set():
+                # A text-only final answer is not a persisted, validated report.
+                # Allow one bounded completion using the same history and budgets.
+                result = graph.invoke(
+                    {
+                        "messages": [
+                            *result.get("messages", []),
+                            {
+                                "role": "user",
+                                "content": "你尚未调用 submit_analysis_report，任务尚未完成。"
+                                "请复用上面已成功的证据和产物，立即提交结构化报告；"
+                                "不要重复查询或绘图。只发布已有证据支持的数值，"
+                                "未完成部分明确写入 limitations/unresolved_questions。",
+                            },
+                        ]
+                    },
+                    config=child_config,
+                )
+                if result.get("__interrupt__"):
+                    raise GraphInterrupt(result["__interrupt__"])
+                reports = self.store.list(session, run, "report")
             cancelled = runtime.cancel_event.is_set()
             report = (
                 reports[-1]
@@ -121,6 +191,7 @@ class AnalysisService:
         except GraphInterrupt:
             raise
         except Exception as exc:
+            runtime.abort_pending(str(exc))
             cancelled = str(exc) == "cancelled" or runtime.cancel_event.is_set()
             reports = self.store.list(session, run, "report")
             if reports:

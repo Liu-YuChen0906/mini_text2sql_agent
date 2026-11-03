@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, with_config
+from typing_extensions import NotRequired, TypedDict
 
 
 def uid(prefix: str) -> str:
@@ -20,14 +21,32 @@ class Protocol(BaseModel):
     schema_version: int = 1
 
 
+@with_config(ConfigDict(extra="forbid"))
+class MetricDefinition(TypedDict):
+    name: str
+    definition: NotRequired[str]
+    unit: NotRequired[str]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class AnalysisPeriod(TypedDict):
+    start: str
+    end: str
+
+
+@with_config(ConfigDict(extra="forbid"))
+class UnspecifiedPeriod(TypedDict):
+    pass
+
+
 class AnalysisTask(Protocol):
     question: str
     objective: str = ""
-    metrics: list[dict[str, str]] = Field(default_factory=list)
+    metrics: list[MetricDefinition] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     filters: dict[str, Any] = Field(default_factory=dict)
-    time_range: dict[str, str] = Field(default_factory=dict)
-    comparison_range: dict[str, str] = Field(default_factory=dict)
+    time_range: AnalysisPeriod | UnspecifiedPeriod = Field(default_factory=dict)
+    comparison_range: AnalysisPeriod | UnspecifiedPeriod = Field(default_factory=dict)
     timezone: str = "Asia/Shanghai"
     granularity: str = ""
     input_dataset_ids: list[str] = Field(default_factory=list)
@@ -36,9 +55,12 @@ class AnalysisTask(Protocol):
 
     @model_validator(mode="after")
     def valid_ranges(self):
-        from zoneinfo import ZoneInfo
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-        ZoneInfo(self.timezone)
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("timezone 必须是有效的 IANA 时区") from exc
         for interval in (self.time_range, self.comparison_range):
             if interval:
                 if set(interval) != {"start", "end"}:
@@ -48,6 +70,10 @@ class AnalysisTask(Protocol):
                 start, end = [
                     datetime.fromisoformat(interval[k]) for k in ("start", "end")
                 ]
+                if (start.tzinfo is None) != (end.tzinfo is None):
+                    raise ValueError(
+                        "同一时间区间的起止时间必须同时带时区或同时不带时区"
+                    )
                 if start >= end:
                     raise ValueError("time range start must precede end")
         return self
@@ -158,7 +184,7 @@ class AnalysisConfig(Protocol):
     max_query_rows: int = Field(default=10000, ge=1)
     max_query_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     max_tool_calls: int = Field(default=20, ge=1)
-    max_model_calls: int = Field(default=12, ge=1)
+    max_model_calls: int = Field(default=20, ge=1)
     run_seconds: float = Field(default=180, gt=0)
     max_repairs: int = Field(default=2, ge=0, le=2)
     retention_days: int = Field(default=30, ge=1)

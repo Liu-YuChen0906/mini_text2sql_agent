@@ -149,6 +149,8 @@ def build_agent_graph(
             prompt = ("你是 Mini OpenChatBI 主 Agent。简单查数调用 run_text2sql；复杂多步分析、归因、趋势或 Python 计算调用 data_analysis。"
                       "每轮仅调用一个工具，不得自行编造业务事实。委派 task 必须自包含已明确口径及历史上下文，"
                       "解析相对时间，日期区间左闭右开；不要猜测未明确的口径。历史数据用 input_dataset_ids，不能手抄。"
+                      "metrics 是含 name、definition、unit 的对象数组；时间对象只含 start、end，timezone、granularity 外置。"
+                      "time_range 是当前期，comparison_range 是基期；变化贡献度为分组增减量/总增减量，不能擅自改为除以基期总量。"
                       f"当前时间：{datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}。\n本会话分析历史（引用时须注明原时间并重新核对证据）：{analysis_context}")
         messages = [SystemMessage(content=f"{prompt}\n\n成功查询历史：\n{index}")]
         messages.extend(state["messages"][-16:])
@@ -206,11 +208,22 @@ def build_agent_graph(
 
     def prepare_analysis(state: AgentState, config: RunnableConfig):
         from mini.analysis.models import AnalysisTask
-        call = state["messages"][-1].tool_calls[0]
-        task = AnalysisTask.model_validate(call.get("args", {}).get("task", {}))
+        from mini.analysis.preparation import prepare_task
+        from mini.analysis.validation import submit_report
+        task, updates, errors = prepare_task(routing_model, state['messages'], state['current_question'])
         session = config["configurable"]["thread_id"]
+        if task is None:
+            task = AnalysisTask(question=state['current_question'])
+            run = analysis_service.start(session, state['turn_id'], task, config['configurable'].get('request_id',''))
+            report = submit_report(analysis_service.store, session, run, [],
+                limitations=['模型未能正确整理分析任务，本轮尚未查询数据。可以重新发送原问题。'], status='failed')
+            report['validation_errors'] = errors
+            analysis_service.store.save('report',report['report_id'],session,run,report)
+            record = analysis_service.store.get(session,run,'run');record['status']='failed'
+            analysis_service.store.save('run',run,session,run,record)
+            return {'messages':updates,'analysis_run_id':run,'analysis_outcome':report,'route':'analysis_failed'}
         run = analysis_service.start(session, state["turn_id"], task, config["configurable"].get("request_id", ""))
-        return {"analysis_run_id": run}
+        return {"messages":updates,"analysis_run_id": run,"route":"analysis_ready"}
 
     def analysis_node(state: AgentState, config: RunnableConfig):
         call = state["messages"][-1].tool_calls[0]
@@ -223,7 +236,7 @@ def build_agent_graph(
     graph.add_node("run_text2sql", query_node)
     graph.add_node("prepare_analysis", prepare_analysis)
     graph.add_node("data_analysis", analysis_node)
-    graph.add_edge("prepare_analysis", "data_analysis")
+    graph.add_conditional_edges("prepare_analysis", lambda state: state["route"], {"analysis_ready":"data_analysis","analysis_failed":END})
     graph.add_edge("data_analysis", END)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", lambda state: state["route"], {"query": "run_text2sql", "analysis": "prepare_analysis", "end": END})

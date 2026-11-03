@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 
 PROMPT = """你是数据分析子 Agent。只按自包含任务分析，关键口径有疑义时用 query_dataset 的澄清。
 先规划，使用已有数据集或查询实际数据，调用固定工具或编写并实际运行 Python，最后必须 submit_analysis_report。
+database_schema 是服务器读取的实际表/字段元数据，不能当成业务数值。已有结构时直接查询本步骤业务数据，不要先查询全库行数或枚举表结构；query_dataset 内部会完成选表和字段检索。
 已有 input_datasets 含 schema、coverage、units 和真实预览；不必为了探查接口而消耗 Python 调用。
 SDK 约定：load_dataset(id) 直接返回 pandas.DataFrame；emit_result(dict) 提交合法 JSON 数值；save_figure(fig,name) 和 save_dataset(df,name,units={列名:单位}) 都返回 None；保存派生表时显式声明列单位。
 产物是否成功应检查 run_python_analysis 工具返回的 artifacts（media_type=image/png），不在 Python 中猜测产物 ID 或把返回 None 当成失败。

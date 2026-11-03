@@ -15,6 +15,7 @@ from mini.analysis.store import encode
 from mini.analysis.tools.statistics import NAMES, calculate
 from mini.analysis.validation import submit_report
 from mini.query.database import ExecutionOutcome, empty_result
+from mini.runtime.limits import ExecutionBudgetExceeded
 
 
 def response(ev, store):
@@ -59,8 +60,19 @@ class AnalysisRuntime:
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise ValueError("cancelled")
         if self.remaining() <= 0:
-            raise ValueError("budget_exhausted:wall_clock")
-        self.store.consume(self.session, self.run, "tools", self.config.max_tool_calls)
+            raise ExecutionBudgetExceeded("budget_exhausted:wall_clock")
+        try:
+            self.store.consume(
+                self.session, self.run, "tools", self.config.max_tool_calls
+            )
+        except ValueError as exc:
+            raise ExecutionBudgetExceeded(str(exc)) from exc
+
+    def abort_pending(self, reason):
+        for evidence in self.store.list(self.session, self.run, "evidence"):
+            if evidence["status"] == "running":
+                evidence.update(status="error", error=reason[:2000])
+                self.store.finish(evidence)
 
     def execute(self, name, ids, parameters, operation, source=None):
         parameters = dict(parameters)
@@ -355,6 +367,10 @@ class AnalysisRuntime:
                         )
                         ev["output_dataset_ids"] = [ds["dataset_id"]]
                         ev["artifact_ids"] = [ds["data_artifact_id"]]
+                except ExecutionBudgetExceeded as exc:
+                    ev.update(status="error", error=str(exc))
+                    runtime.store.finish(ev)
+                    raise
                 except Exception as exc:
                     ev.update(status="error", error=str(exc))
                     outcome = ExecutionOutcome(empty_result("error", str(exc)))
@@ -368,6 +384,7 @@ class AnalysisRuntime:
             {
                 "task": self.store.get(self.session, self.run, "run")["task"],
                 "coverage": coverage,
+                "expected_result_units": units,
             }
         ).decode()
         result = graph.invoke(

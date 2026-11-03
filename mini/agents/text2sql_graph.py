@@ -11,6 +11,8 @@ from mini.query.schema_linking import LinkResult, QuestionInfo, SchemaLinker, Se
 from mini.query.sql_context import build_sql_context
 from mini.query.sql_quality import score_sql
 
+from mini.runtime.limits import ExecutionBudgetExceeded
+
 MAX_SQL_RETRIES = 3
 MAX_CLARIFICATIONS = 2
 CONFIDENCE_THRESHOLD = 0.7
@@ -114,6 +116,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
             question = f"已完成查询历史：\n{state['context']}\n当前用户问题：{question}"
         try:
             info, clarification = extract_question_for_graph(resources.llm, question)
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"信息提取失败：{exc}"}
         if clarification:
@@ -166,6 +170,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         try:
             info = QuestionInfo(**state["info"])
             linked = linker.link_from_info(info)
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"Schema Linking 失败：{exc}"}
         return {
@@ -182,6 +188,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             context = build_sql_context(_link_result(state), resources.catalog, resources.indexes.text2sql, resources.adapter.dialect)
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"SQL 上下文构造失败：{exc}"}
         return {"status": "context_ready", "sql_context": context}
@@ -194,6 +202,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             sql = generate_sql(state["rewrite_question"], state["sql_context"], resources.llm, resources.adapter.dialect)
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"SQL 生成失败：{exc}"}
         if not sql or sql.lower() == "null":
@@ -212,6 +222,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
                 state["rewrite_question"], state["sql_context"], previous["sql"], previous["error"], resources.llm,
                 resources.adapter.dialect,
             )
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"SQL 修复失败：{exc}"}
         if not sql or sql.lower() == "null":
@@ -229,6 +241,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
                 state["rewrite_question"], state["sql_context"], state["sql"], state["human_feedback"], resources.llm,
                 resources.adapter.dialect,
             )
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "error", "error": f"人工反馈后的 SQL 重写失败：{exc}"}
         if not sql or sql.lower() == "null":
@@ -243,6 +257,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
         """
         try:
             outcome = resources.adapter.execute_readonly(state["sql"])
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"status": "fatal", "error": f"SQL 执行失败：{exc}"}
         result = outcome.result
@@ -284,6 +300,8 @@ def build_text2sql_graph(resources: RuntimeResources, checkpointer: Any):
                 resources.llm, state["rewrite_question"], state["sql"], state["sql_context"], state["result"]
             )
             return {"confidence": evaluated.score, "confidence_reasons": evaluated.reasons}
+        except ExecutionBudgetExceeded:
+            raise
         except Exception as exc:
             return {"confidence": None, "confidence_reasons": [f"评分不可用：{exc}"]}
 
