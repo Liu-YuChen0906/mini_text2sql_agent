@@ -5,7 +5,7 @@ from typing import Callable
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -78,6 +78,10 @@ def create_app(service_factory: Callable[[], WebSessionService] | None = None) -
         """读取指定会话的状态、待处理交互与页面消息。"""
         return await call(service().get_session, session_id)
 
+    @app.delete("/api/sessions/{session_id}")
+    async def delete_session(session_id: str):
+        return await call(service().delete_session, session_id)
+
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: MessageInput):
         """提交一轮用户问题；相同请求 ID 可安全查询已有结果。"""
@@ -93,6 +97,33 @@ def create_app(service_factory: Callable[[], WebSessionService] | None = None) -
     async def retry(session_id: str):
         """显式恢复上次中断的网页请求。"""
         return await call(service().retry, session_id)
+
+    @app.post("/api/sessions/{session_id}/analysis/{run_id}/cancel")
+    async def cancel_analysis(session_id: str, run_id: str):
+        return await call(service().cancel_analysis, session_id, run_id)
+
+    @app.get("/api/sessions/{session_id}/analysis/{run_id}")
+    async def analysis_report(session_id: str, run_id: str):
+        return await call(service().analysis_record, session_id, "run", run_id)
+
+    @app.get("/api/sessions/{session_id}/evidence/{evidence_id}")
+    async def evidence(session_id: str, evidence_id: str):
+        return await call(service().analysis_record, session_id, "evidence", evidence_id)
+
+    @app.get("/api/sessions/{session_id}/datasets/{dataset_id}")
+    async def dataset(session_id: str, dataset_id: str, offset: int = 0, limit: int = 50):
+        if offset < 0 or not 1 <= limit <= 100:
+            raise HTTPException(422, "分页参数无效")
+        meta, snapshot = await call(service().analysis_record, session_id, "dataset", dataset_id)
+        return {"metadata": meta, "columns": snapshot["columns"], "rows": snapshot["rows"][offset:offset+limit], "offset":offset}
+
+    @app.get("/api/sessions/{session_id}/artifacts/{artifact_id}")
+    async def artifact(session_id: str, artifact_id: str):
+        meta, content = await call(service().analysis_record, session_id, "artifact", artifact_id)
+        # Names are not interpolated into headers. Text/JSON never executes as HTML.
+        media = meta["media_type"] if meta["media_type"] in {"application/json", "text/plain", "image/png"} else "application/octet-stream"
+        return Response(content, media_type=media, headers={"Content-Disposition":f'attachment; filename="{artifact_id}"',
+                        "X-Content-Type-Options":"nosniff", "Content-Security-Policy":"default-src 'none'", "Cache-Control":"no-store"})
 
     dist = PROJECT_DIR / "frontend" / "dist"
     if dist.is_dir():

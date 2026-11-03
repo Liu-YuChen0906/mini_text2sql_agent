@@ -18,6 +18,7 @@ from rich.table import Table
 from rich.text import Text
 
 NODE_LABELS = {
+    "data_analysis": "数据分析", "prepare_analysis": "准备分析任务",
     "agent": "主 Agent", "run_text2sql": "调用 Text2SQL",
     "extract": "理解问题", "clarify": "澄清问题", "link": "选择表和字段",
     "context": "构造上下文", "generate": "生成 SQL", "regenerate": "修复 SQL",

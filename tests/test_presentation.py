@@ -224,7 +224,7 @@ def test_main_saves_pending_task_on_eof(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(checkpoint)])
     monkeypatch.setattr(main, "create_llm", lambda: object())
     monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
-    monkeypatch.setattr(main, "build_agent_graph", lambda *args: graph)
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args, **kwargs: graph)
     monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="saved-task"))
     try:
         main.main()
@@ -262,7 +262,7 @@ def test_cli_multiple_result_tables_and_closed_session(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     monkeypatch.setattr(main, "create_llm", lambda: object())
     monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
-    monkeypatch.setattr(main, "build_agent_graph", lambda *args: graph)
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args, **kwargs: graph)
     monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="conversation"))
     monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(tmp_path / "checkpoints.sqlite")])
     console, output = capture(100)
@@ -292,7 +292,7 @@ def test_cli_resume_between_rounds(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(main, "create_llm", lambda: object())
     monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
-    monkeypatch.setattr(main, "build_agent_graph", lambda *args: graph)
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args, **kwargs: graph)
     monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="saved-conversation"))
     checkpoint = tmp_path / "checkpoints.sqlite"
     monkeypatch.setattr("sys.argv", ["main.py", "--checkpoint", str(checkpoint)])

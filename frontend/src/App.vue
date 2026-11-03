@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AnalysisReport from './components/AnalysisReport.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 
 type Status = 'idle' | 'running' | 'pending' | 'interrupted' | 'closed'
@@ -6,13 +7,14 @@ type Message = {
   id: number
   turn_id: number
   role: 'user' | 'assistant'
-  kind: 'text' | 'query' | 'error' | 'clarification' | 'sql_review' | 'clarification_answer' | 'review_action'
+  kind: 'analysis' | 'text' | 'query' | 'error' | 'clarification' | 'sql_review' | 'clarification_answer' | 'review_action'
   payload: Record<string, any>
   created_at: string
 }
 type SessionSummary = { id: string; title: string; status: Status; updated_at: string }
 type Session = SessionSummary & {
   turn_id: number
+  analysis_run_id?: string
   pending: (Record<string, any> & { id: string; kind: string }) | null
   messages: Message[]
 }
@@ -158,6 +160,15 @@ async function submitPending() {
   } finally { busy.value = false; workingSessionId.value = '' }
 }
 
+async function cancelAnalysis() {
+  const id = currentId.value
+  const run = current.value?.analysis_run_id
+  if (!id || !run) return
+  try {
+    await api(`/api/sessions/${id}/analysis/${run}/cancel`, { method: 'POST' })
+  } catch (caught) { error.value = messageOf(caught) }
+}
+
 async function retry() {
   const id = currentId.value
   if (!id || busy.value) return
@@ -237,6 +248,7 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
           <div class="message-content">
             <div class="message-author">{{ item.role === 'user' ? '你' : 'Mini OpenChatBI' }} <time>{{ dateText(item.created_at) }}</time></div>
             <div v-if="item.kind === 'text'" class="text-message">{{ item.payload.content }}</div>
+            <AnalysisReport v-else-if="item.kind === 'analysis'" :report="item.payload" :session-id="currentId" />
             <div v-else-if="item.kind === 'query'" class="result-card">
               <div class="card-heading"><strong>查询结果</strong><span v-if="item.payload.human_decision === 'approve'" class="approved">人工已通过</span></div>
               <div class="sql-heading"><span>SQL</span><button @click="copySql(item.payload.sql)">复制 SQL</button></div>
@@ -264,7 +276,7 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
             <div v-else-if="item.kind === 'review_action'" class="text-message">审核：{{ decisionLabels[item.payload.decision] }}<span v-if="item.payload.feedback"> · {{ item.payload.feedback }}</span></div>
           </div>
         </div>
-        <div v-if="current?.status === 'running' || workingSessionId === currentId" class="working"><span class="spinner"></span> 正在生成完整结果…</div>
+        <div v-if="current?.status === 'running' || workingSessionId === currentId" class="working"><span class="spinner"></span> 正在生成完整结果…<button v-if="current?.analysis_run_id" @click="cancelAnalysis">取消分析</button></div>
         <div v-if="current?.status === 'interrupted'" class="interrupted-card"><strong>执行中断</strong><p>服务上次执行未完成。请确认后从已保存的检查点继续。</p><button class="primary-button" :disabled="busy" @click="retry">重试执行</button></div>
         <div ref="bottom"></div>
       </div>

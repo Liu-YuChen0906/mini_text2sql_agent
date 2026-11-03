@@ -1,0 +1,9 @@
+**
+!mini/
+!mini/analysis/
+!mini/analysis/execution/
+!mini/analysis/execution/analysis_sdk.py
+!mini/analysis/execution/runner.py
+!Dockerfile.analysis
+!requirements/
+!requirements/executor.txt

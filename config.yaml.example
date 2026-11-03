@@ -3,9 +3,9 @@ default_llm:
   class: langchain_deepseek.ChatDeepSeek
   params:
     api_key: YOUR_API_KEY_HERE
-    model: deepseek-chat
+    model: deepseek-flash
     temperature: 0
-    max_tokens: 1024
+    max_tokens: 4096
 
 # 与原项目一致：Catalog 使用文件存储，Chroma 保存三组检索索引。
 catalog_store:
@@ -30,3 +30,26 @@ embedding_model:
     model: text-embedding-v4
     chunk_size: 10
     check_embedding_ctx_length: false
+
+# Optional analysis: pip install -r requirements/analysis.txt
+# Build: docker build -f Dockerfile.analysis -t betterchatbi-analysis:1 .
+analysis:
+  enabled: false
+  model: null  # Same class/params shape as default_llm; null reuses the main model.
+  evidence_dir: var/analysis
+  image: betterchatbi-analysis:1
+  timeout_seconds: 30
+  cpus: 1
+  memory_mib: 512
+  pids: 64
+  output_bytes: 20971520
+  file_bytes: 10485760
+  file_count: 32
+  log_bytes: 65536
+  max_query_rows: 10000
+  max_query_bytes: 10485760
+  max_tool_calls: 20
+  max_model_calls: 12
+  run_seconds: 180
+  max_repairs: 2
+  retention_days: 30

@@ -10,3 +10,32 @@ web_checkpoints.sqlite*
 frontend/node_modules/
 frontend/dist/
 .coverage*
+
+# Local secrets (keep configuration templates versioned)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python tooling and build artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+*.egg-info/
+/build/
+/dist/
+
+# Analysis runtime: evidence DB, snapshots, generated code, logs and charts
+/var/analysis/
+/var/analysis-tmp/
+
+# Frontend local tooling
+frontend/*.tsbuildinfo
+frontend/.vite/
+
+# Local diagnostic logs
+*.log
+
+# Generated architecture diagrams
+/.archify/

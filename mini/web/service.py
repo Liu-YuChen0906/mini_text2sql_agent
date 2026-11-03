@@ -65,6 +65,8 @@ class WebSessionService:
         *,
         llm: Any = None,
         query_resources_factory: Any = None,
+        analysis_service: Any = None,
+        analysis_store: Any = None,
     ):
         """初始化检查点、成功查询历史和主图，并标记遗留运行请求。"""
         self.path = Path(path)
@@ -76,7 +78,13 @@ class WebSessionService:
         self.history = QueryHistory(self.path)
         self.llm = llm if llm is not None else create_llm()
         factory = query_resources_factory or (lambda: load_resources(llm=self.llm))
-        self.graph = build_agent_graph(self.llm, SqliteSaver(self.connection), self.history, factory)
+        if analysis_service is None:
+            from mini.analysis.delegation import load_analysis_service
+            analysis_service = load_analysis_service(self.llm, factory)
+        self.analysis = analysis_service
+        from mini.analysis.delegation import load_analysis_store
+        self.analysis_store = analysis_store or (self.analysis.store if self.analysis else load_analysis_store())
+        self.graph = build_agent_graph(self.llm, SqliteSaver(self.connection), self.history, factory, analysis_service=self.analysis)
         # The previous process cannot still be running after a fresh startup.
         with self._db() as db:
             db.execute("UPDATE web_sessions SET status='interrupted', updated_at=? WHERE status='running'", (_now(),))
@@ -155,7 +163,66 @@ class WebSessionService:
              "payload": json.loads(row["payload"])}
             for row in messages
         ]
+        if self.analysis and output['status'] in ('running','pending'):
+            snapshot = self.graph.get_state({'configurable':{'thread_id':session_id}})
+            if snapshot.values.get('turn_id') == output['turn_id']:
+                output['analysis_run_id'] = snapshot.values.get('analysis_run_id', '')
+        if self.analysis_store:
+            from mini.analysis.validation import read_report
+            for message in output["messages"]:
+                if message["kind"] == "analysis":
+                    message["payload"] = read_report(self.analysis_store, session_id, message["payload"])
+        else:
+            for message in output['messages']:
+                if message['kind'] == 'analysis':
+                    message['payload'] = {**message['payload'], 'claims':[], 'status':'failed',
+                        'validation_errors':[*message['payload'].get('validation_errors', []),'分析关闭，证据当前不可用']}
         return output
+
+    def delete_session(self, session_id: str):
+        if not self._execution.acquire(blocking=False):
+            raise ServiceError(409, "执行期间不能删除会话。")
+        try:
+            self.get_session(session_id)
+            if self.analysis_store:
+                self.analysis_store.delete_session(session_id)
+            self.graph.checkpointer.delete_thread(session_id)
+            with self._db() as db:
+                for table, column in (("web_sessions","id"), ("web_messages","session_id"),
+                                      ("web_requests","session_id"), ("successful_queries","session_id")):
+                    db.execute(f"DELETE FROM {table} WHERE {column}=?", (session_id,))
+            return {"status":"deleted"}
+        finally:
+            self._execution.release()
+
+    def cancel_analysis(self, session_id: str, run_id: str):
+        self.get_session(session_id)
+        if self.analysis is None:
+            raise ServiceError(404, "分析任务不可用。")
+        try:
+            return self.analysis.cancel(session_id, run_id)
+        except KeyError:
+            raise ServiceError(404, "分析任务不可用。") from None
+
+    def analysis_record(self, session_id: str, kind: str, identity: str):
+        self.get_session(session_id)
+        if not self.analysis_store:
+            raise ServiceError(404, "证据不可用。")
+        try:
+            if kind == "artifact":
+                return self.analysis_store.read_artifact(session_id, identity)
+            if kind == "dataset":
+                return self.analysis_store.dataset(session_id, identity)
+            if kind == "run":
+                from mini.analysis.validation import read_report
+                self.analysis_store.get(session_id, identity, "run")
+                return [read_report(self.analysis_store, session_id, r) for r in self.analysis_store.list(session_id, identity, "report")]
+            record = self.analysis_store.get(session_id, identity, kind)
+            if kind == 'evidence' and record['status'] == 'success':
+                self.analysis_store.evidence(session_id, identity)
+            return record
+        except (KeyError, ValueError, OSError, sqlite3.Error):
+            raise ServiceError(404, "证据不可用。") from None
 
     def _add_message(self, db: sqlite3.Connection, session_id: str, turn_id: int,
                      role: str, kind: str, payload: dict) -> None:
@@ -295,7 +362,7 @@ class WebSessionService:
                  payload: dict, turn_id: int, *, retry: bool = False,
                  starting_checkpoint: str | None = None) -> None:
         """驱动主图，将最终结果或暂停交互转换成持久页面消息。"""
-        config = {"configurable": {"thread_id": session_id}}
+        config = {"configurable": {"thread_id": session_id, "request_id": request_id}}
         try:
             if retry:
                 snapshot = self.graph.get_state(config)
@@ -330,7 +397,10 @@ class WebSessionService:
                 else:
                     values = dict(snapshot.values)
                     outcome = values.get("query_outcome")
-                    if outcome is not None:
+                    analysis = values.get("analysis_outcome")
+                    if analysis is not None:
+                        self._add_message(db, session_id, turn_id, "assistant", "analysis", analysis)
+                    elif outcome is not None:
                         if outcome.get("status") == "success":
                             record = self.history.get(session_id, outcome["record_turn_id"])
                             if record is None:

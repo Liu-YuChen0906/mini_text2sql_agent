@@ -1,4 +1,4 @@
-"""编排持续会话的主 Agent，并将 Text2SQL 作为唯一的数据查询子图。"""
+"""编排持续会话的主 Agent，并接入 Text2SQL 及可选的证据化分析子图。"""
 
 from collections.abc import Callable
 from functools import lru_cache
@@ -26,6 +26,8 @@ class AgentState(MessagesState):
     reply: str
     query_outcome: dict[str, Any] | None
     session_closed: bool
+    analysis_outcome: dict[str, Any] | None
+    analysis_run_id: str
 
 
 def new_agent_turn(question: str, turn_id: int) -> dict[str, Any]:
@@ -41,6 +43,8 @@ def new_agent_turn(question: str, turn_id: int) -> dict[str, Any]:
         "route": "",
         "reply": "",
         "query_outcome": None,
+        "analysis_outcome": None,
+        "analysis_run_id": "",
     }
 
 
@@ -96,6 +100,7 @@ SYSTEM_PROMPT = (
 def build_agent_graph(
     llm: Any, checkpointer: Any, history: QueryHistory,
     query_resources_factory: Callable[[], RuntimeResources],
+    *, analysis_service: Any = None,
 ):
     """用途：构建主 Agent 图，并接入可暂停的 Text2SQL 子图。
 
@@ -109,7 +114,15 @@ def build_agent_graph(
         return build_text2sql_graph(query_resources_factory(), None)
 
     query_tool = create_text2sql_tool(child_graph, history)
-    routing_model = llm.bind_tools([query_tool], parallel_tool_calls=False)
+    tools = [query_tool]
+    if analysis_service is not None:
+        from mini.analysis.models import AnalysisTask
+        @tool("data_analysis")
+        def analysis_tool(task: AnalysisTask) -> str:
+            """委派复杂多步分析。task 必须自包含问题、已明确的指标口径、时间范围、时区及假设。"""
+            return "由主图注入身份并执行"
+        tools.append(analysis_tool)
+    routing_model = llm.bind_tools(tools, parallel_tool_calls=False)
 
     def route_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         """用途：结合会话消息和历史摘要，判断本轮是否需要查询数据库。
@@ -123,15 +136,29 @@ def build_agent_graph(
         index = history_index(history.list(session_id))
         # 工具消息只含少量预览；完整的已返回结果行保存在结构化历史中，
         # 仅在模型引用指定轮次时读取。
-        messages = [SystemMessage(content=f"{SYSTEM_PROMPT}\n\n成功查询历史：\n{index}")]
+        prompt = SYSTEM_PROMPT
+        if analysis_service is not None:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            from mini.analysis.store import encode
+            previous = []
+            for run in analysis_service.store.recent_runs(session_id):
+                previous.append({'run_id':run['run_id'],'created_at':run['created_at'],'task':run['task'],
+                    'datasets':[{'dataset_id':d['dataset_id'],'columns':d['columns'],'units':d['units'],'coverage':d['coverage']} for d in analysis_service.store.list(session_id,run['run_id'],'dataset')]})
+            analysis_context = encode(previous).decode()[:16000]
+            prompt = ("你是 Mini OpenChatBI 主 Agent。简单查数调用 run_text2sql；复杂多步分析、归因、趋势或 Python 计算调用 data_analysis。"
+                      "每轮仅调用一个工具，不得自行编造业务事实。委派 task 必须自包含已明确口径及历史上下文，"
+                      "解析相对时间，日期区间左闭右开；不要猜测未明确的口径。历史数据用 input_dataset_ids，不能手抄。"
+                      f"当前时间：{datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}。\n本会话分析历史（引用时须注明原时间并重新核对证据）：{analysis_context}")
+        messages = [SystemMessage(content=f"{prompt}\n\n成功查询历史：\n{index}")]
         messages.extend(state["messages"][-16:])
         response = routing_model.invoke(messages)
         if not isinstance(response, AIMessage):
             raise ValueError("主 Agent 没有返回 AIMessage。")
         if response.tool_calls:
-            if len(response.tool_calls) != 1 or response.tool_calls[0]["name"] != "run_text2sql":
-                raise ValueError("主 Agent 只能调用一次 run_text2sql。")
-            return {"messages": [response], "route": "query", "reply": ""}
+            if len(response.tool_calls) != 1 or response.tool_calls[0]["name"] not in {t.name for t in tools}:
+                raise ValueError("主 Agent 每轮只能调用一个已注册的数据工具。")
+            return {"messages": [response], "route": "analysis" if response.tool_calls[0]["name"] == "data_analysis" else "query", "reply": ""}
         reply = str(response.content).strip()
         if not reply:
             raise ValueError("主 Agent 没有返回可显示的回复。")
@@ -177,10 +204,28 @@ def build_agent_graph(
             "session_closed": bool(result.get("session_closed")),
         }
 
+    def prepare_analysis(state: AgentState, config: RunnableConfig):
+        from mini.analysis.models import AnalysisTask
+        call = state["messages"][-1].tool_calls[0]
+        task = AnalysisTask.model_validate(call.get("args", {}).get("task", {}))
+        session = config["configurable"]["thread_id"]
+        run = analysis_service.start(session, state["turn_id"], task, config["configurable"].get("request_id", ""))
+        return {"analysis_run_id": run}
+
+    def analysis_node(state: AgentState, config: RunnableConfig):
+        call = state["messages"][-1].tool_calls[0]
+        report = analysis_service.invoke(config["configurable"]["thread_id"], state["analysis_run_id"], config)
+        return {"analysis_outcome": report, "route": "end", "messages": [ToolMessage(
+            content=f"分析报告 {report['report_id']}：{report['status']}", tool_call_id=call["id"], name="data_analysis")]}
+
     graph = StateGraph(AgentState)
     graph.add_node("agent", route_node)
     graph.add_node("run_text2sql", query_node)
+    graph.add_node("prepare_analysis", prepare_analysis)
+    graph.add_node("data_analysis", analysis_node)
+    graph.add_edge("prepare_analysis", "data_analysis")
+    graph.add_edge("data_analysis", END)
     graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", lambda state: state["route"], {"query": "run_text2sql", "end": END})
+    graph.add_conditional_edges("agent", lambda state: state["route"], {"query": "run_text2sql", "analysis": "prepare_analysis", "end": END})
     graph.add_edge("run_text2sql", END)
     return graph.compile(checkpointer=checkpointer)

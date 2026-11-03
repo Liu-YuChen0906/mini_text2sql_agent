@@ -364,7 +364,7 @@ def test_main_displays_graph_result(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr("builtins.input", read)
     monkeypatch.setattr(main, "create_llm", lambda: object())
     monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
-    monkeypatch.setattr(main, "build_agent_graph", lambda *args: FakeGraph())
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args, **kwargs: FakeGraph())
     monkeypatch.setattr(main, "uuid4", lambda: SimpleNamespace(hex="fixed-id"))
     main.main()
     output = capsys.readouterr().out
@@ -410,7 +410,7 @@ def test_main_resumes_pending_clarification(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr("builtins.input", lambda _: "上个月")
     monkeypatch.setattr(main, "create_llm", lambda: object())
     monkeypatch.setattr(main, "load_resources", lambda **kwargs: object())
-    monkeypatch.setattr(main, "build_agent_graph", lambda *args: FakeGraph())
+    monkeypatch.setattr(main, "build_agent_graph", lambda *args, **kwargs: FakeGraph())
     main.main()
     output = capsys.readouterr().out
     assert "正在恢复任务：saved-id" in output

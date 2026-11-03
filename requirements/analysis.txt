@@ -1,0 +1,4 @@
+-r runtime.txt
+# Validated against existing core/graph pins; default execution/file/delegation tools are gated.
+deepagents==0.6.7
+langchain==1.3.14

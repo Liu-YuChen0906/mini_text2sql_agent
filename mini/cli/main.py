@@ -130,6 +130,11 @@ def _run_agent_graph(graph, inputs, config: dict, *, console: Console):
 
 def _show_agent_turn(values: dict, history: QueryHistory, session_id: str, console: Console) -> None:
     """用途：按主图本轮结果展示 SQL 表格或普通交流文字回复。"""
+    analysis = values.get("analysis_outcome")
+    if analysis is not None:
+        from mini.analysis.reporting import show_report
+        show_report(analysis, session_id, console)
+        return
     outcome = values.get("query_outcome")
     if outcome is not None:
         if outcome.get("status") == "success":
@@ -170,9 +175,12 @@ def _drive_agent(args, question: str | None, console: Console) -> None:
     llm = create_llm()
     with closing(sqlite3.connect(args.checkpoint, check_same_thread=False)) as connection:
         history = QueryHistory(args.checkpoint)
+        from mini.analysis.delegation import load_analysis_service
+        factory = lambda: load_resources(llm=llm)
+        analysis = load_analysis_service(llm, factory)
         graph = build_agent_graph(
             llm, SqliteSaver(connection), history,
-            lambda: load_resources(llm=llm),
+            factory, **({"analysis_service": analysis} if analysis is not None else {}),
         )
         if args.resume:
             snapshot = graph.get_state(config)

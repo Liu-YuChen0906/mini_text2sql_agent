@@ -1,0 +1,8 @@
+FROM python:3.12.10-slim@sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db
+ARG ANALYSIS_PIP_INDEX_URL=https://pypi.org/simple
+COPY requirements/executor.txt /opt/analysis/requirements.txt
+RUN pip install --no-cache-dir --index-url "$ANALYSIS_PIP_INDEX_URL" -r /opt/analysis/requirements.txt
+COPY mini/analysis/execution/analysis_sdk.py mini/analysis/execution/runner.py /opt/analysis/
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 65532:65532
+ENTRYPOINT ["python", "/opt/analysis/runner.py"]
